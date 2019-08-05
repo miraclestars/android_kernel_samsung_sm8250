@@ -4137,7 +4137,6 @@ static int build_sit_entries(struct f2fs_sb_info *sbi)
 			f2fs_msg(sbi->sb, KERN_ERR,
 					"Wrong journal entry on segno %u",
 					start);
-			set_sbi_flag(sbi, SBI_NEED_FSCK);
 			err = -EFSCORRUPTED;
 			break;
 		}
@@ -4181,7 +4180,6 @@ static int build_sit_entries(struct f2fs_sb_info *sbi)
 		f2fs_msg(sbi->sb, KERN_ERR,
 			"SIT is corrupted node# %u vs %u",
 			total_node_blocks, valid_node_count(sbi));
-		set_sbi_flag(sbi, SBI_NEED_FSCK);
 		err = -EFSCORRUPTED;
 	}
 
