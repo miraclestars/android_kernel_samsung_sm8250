@@ -3434,7 +3434,7 @@ static void tcp_rcv_nxt_update(struct tcp_sock *tp, u32 seq)
 
 	sock_owned_by_me((struct sock *)tp);
 	tp->bytes_received += delta;
-	tp->rcv_nxt = seq;
+	WRITE_ONCE(tp->rcv_nxt, seq);
 }
 
 /* Update our send window.
@@ -6161,7 +6161,7 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 		/* Ok.. it's good. Set up sequence numbers and
 		 * move to established.
 		 */
-		tp->rcv_nxt = TCP_SKB_CB(skb)->seq + 1;
+		WRITE_ONCE(tp->rcv_nxt, TCP_SKB_CB(skb)->seq + 1);
 		tp->rcv_wup = TCP_SKB_CB(skb)->seq + 1;
 
 		/* RFC1323: The window in SYN & SYN/ACK segments is
@@ -6289,7 +6289,7 @@ discard:
 			tp->advmss -= MPTCP_SUB_LEN_DSM_ALIGN;
 		}
 #endif
-		tp->rcv_nxt = TCP_SKB_CB(skb)->seq + 1;
+		WRITE_ONCE(tp->rcv_nxt, TCP_SKB_CB(skb)->seq + 1);
 		tp->copied_seq = tp->rcv_nxt;
 		tp->rcv_wup = TCP_SKB_CB(skb)->seq + 1;
 
