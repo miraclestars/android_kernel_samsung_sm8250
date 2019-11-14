@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved. */
+/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved. */
 
 #include <linux/debugfs.h>
 #include <linux/delay.h>
@@ -19,6 +19,8 @@
 #include <linux/sec_debug.h>
 static char mdmerr_info[128]; /* sec_debug_summary_data_apss */
 #endif
+
+static void mhi_special_events_pending(struct mhi_controller *mhi_cntrl);
 
 /*
  * Not all MHI states transitions are sync transitions. Linkdown, SSR, and
@@ -538,6 +540,8 @@ static int mhi_pm_mission_mode_transition(struct mhi_controller *mhi_cntrl)
 
 	if (MHI_REG_ACCESS_VALID(mhi_cntrl->pm_state))
 		mhi_timesync_log(mhi_cntrl);
+
+	mhi_special_events_pending(mhi_cntrl);
 
 	MHI_LOG("Adding new devices\n");
 
