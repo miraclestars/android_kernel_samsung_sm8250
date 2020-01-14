@@ -537,10 +537,8 @@ static int mhi_pm_mission_mode_transition(struct mhi_controller *mhi_cntrl)
 
 	read_unlock_bh(&mhi_cntrl->pm_lock);
 
-	/* setup support for additional features (SFR, timesync, etc.) */
+	/* setup support for additional features */
 	mhi_init_sfr(mhi_cntrl);
-	mhi_init_timesync(mhi_cntrl);
-	
 
 	if (MHI_REG_ACCESS_VALID(mhi_cntrl->pm_state))
 		mhi_timesync_log(mhi_cntrl);
@@ -678,9 +676,6 @@ tsklet_kill:
 	}
 
 	mutex_lock(&mhi_cntrl->pm_mutex);
-
-	/* remove support for time sync */
-	mhi_destroy_timesync(mhi_cntrl);
 
 	MHI_ASSERT(atomic_read(&mhi_cntrl->dev_wake), "dev_wake != 0");
 	MHI_ASSERT(atomic_read(&mhi_cntrl->pending_pkts), "pending_pkts != 0");
