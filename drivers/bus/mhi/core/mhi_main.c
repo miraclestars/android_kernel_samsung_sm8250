@@ -1405,6 +1405,10 @@ int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 		mhi_event->last_dev_rp = (u64)dev_rp;
 		
 		chan = MHI_TRE_GET_EV_CHID(local_rp);
+		if (chan >= mhi_cntrl->max_chan) {
+			MHI_ERR("invalid channel id %u\n", chan);
+			continue;
+		}
 		mhi_chan = &mhi_cntrl->mhi_chan[chan];
 
 		if (likely(type == MHI_PKT_TYPE_TX_EVENT)) {
