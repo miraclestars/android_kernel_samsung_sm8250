@@ -1536,9 +1536,11 @@ int __mhi_device_get_sync(struct mhi_controller *mhi_cntrl)
 
 	read_lock_bh(&mhi_cntrl->pm_lock);
 	mhi_cntrl->wake_get(mhi_cntrl, true);
-	mhi_trigger_resume(mhi_cntrl);
 	read_unlock_bh(&mhi_cntrl->pm_lock);
 	
+	pm_wakeup_hard_event(&mhi_cntrl->mhi_dev->dev);
+	mhi_cntrl->runtime_get(mhi_cntrl, mhi_cntrl->priv_data);
+
 	mhi_force_reg_write(mhi_cntrl);
 
 	ret = wait_event_timeout(mhi_cntrl->state_event,
@@ -1553,9 +1555,11 @@ int __mhi_device_get_sync(struct mhi_controller *mhi_cntrl)
 		read_lock_bh(&mhi_cntrl->pm_lock);
 		mhi_cntrl->wake_put(mhi_cntrl, false);
 		read_unlock_bh(&mhi_cntrl->pm_lock);
+		mhi_cntrl->runtime_put(mhi_cntrl, mhi_cntrl->priv_data);
 		return -EIO;
 	}
 
+	mhi_cntrl->runtime_put(mhi_cntrl, mhi_cntrl->priv_data);
 	return 0;
 }
 
