@@ -1337,6 +1337,7 @@ static int cnss_pci_start_time_sync_update(struct cnss_pci_data *pci_priv)
 
 	switch (pci_priv->device_id) {
 	case QCA6390_DEVICE_ID:
+	case QCA6490_DEVICE_ID:
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -1356,6 +1357,7 @@ static void cnss_pci_stop_time_sync_update(struct cnss_pci_data *pci_priv)
 {
 	switch (pci_priv->device_id) {
 	case QCA6390_DEVICE_ID:
+	case QCA6490_DEVICE_ID:
 		break;
 	default:
 		return;
