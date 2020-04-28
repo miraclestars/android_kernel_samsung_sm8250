@@ -1352,7 +1352,7 @@ int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 		chan = MHI_TRE_GET_EV_CHID(local_rp);
 		if (chan >= mhi_cntrl->max_chan) {
 			MHI_ERR("invalid channel id %u\n", chan);
-			continue;
+			goto next_er_element;
 		}
 		mhi_chan = &mhi_cntrl->mhi_chan[chan];
 
@@ -1364,6 +1364,7 @@ int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 			event_quota--;
 		}
 
+next_er_element:
 		/* color ev ring for channel 101 and 104 */
 		if (mhi_event->er_index == 8)
 			mhi_recycle_ev_ring_element_color(mhi_cntrl, ev_ring);
