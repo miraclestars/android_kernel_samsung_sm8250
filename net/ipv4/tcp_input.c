@@ -4880,7 +4880,8 @@ void tcp_data_ready(struct sock *sk)
 #ifdef CONFIG_MPTCP
 	if (avail < sk->sk_rcvlowat && !sock_flag(sk, SOCK_DONE) && !mptcp(tp))
 #else
-	if (avail < sk->sk_rcvlowat && !sock_flag(sk, SOCK_DONE))
+	if (avail < sk->sk_rcvlowat && !tcp_rmem_pressure(sk) &&
+	    !sock_flag(sk, SOCK_DONE))
 #endif
 		return;
 
