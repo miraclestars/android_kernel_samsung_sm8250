@@ -2345,6 +2345,11 @@ int mhi_debugfs_mhi_vote_show(struct seq_file *m, void *d)
 	struct mhi_controller *mhi_cntrl = m->private;
 	struct mhi_device *mhi_dev = mhi_cntrl->mhi_dev;
 
+	if (!mhi_cntrl)
+		return 0;
+
+	mhi_dev = mhi_cntrl->mhi_dev;
+
 	seq_printf(m, "At %llu ns:\n", sched_clock());
 	seq_printf(m, "%s: device:%u, bus:%u\n", mhi_dev->chan_name,
 		   atomic_read(&mhi_dev->dev_vote),
