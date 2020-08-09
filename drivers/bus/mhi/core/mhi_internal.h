@@ -879,27 +879,27 @@ static inline void mhi_free_coherent(struct mhi_controller *mhi_cntrl,
 }
 
 static inline void *mhi_alloc_uncached(struct mhi_controller *mhi_cntrl,
-		size_t size,
-		dma_addr_t *dma_handle,
-		gfp_t gfp)
+				       size_t size,
+				       dma_addr_t *dma_handle,
+				       gfp_t gfp)
 {
 	void *buf = dma_alloc_attrs(mhi_cntrl->dev, size, dma_handle, gfp,
-					DMA_ATTR_FORCE_NON_COHERENT);
-	
+			DMA_ATTR_FORCE_NON_COHERENT);
+
 	if (buf)
 		atomic_add(size, &mhi_cntrl->alloc_size);
-	
+
 	return buf;
 }
 
 static inline void mhi_free_uncached(struct mhi_controller *mhi_cntrl,
-	size_t size,
-	void *vaddr,
-	dma_addr_t dma_handle)
+				     size_t size,
+				     void *vaddr,
+				     dma_addr_t dma_handle)
 {
 	atomic_sub(size, &mhi_cntrl->alloc_size);
 	dma_free_attrs(mhi_cntrl->dev, size, vaddr, dma_handle,
-	DMA_ATTR_FORCE_NON_COHERENT);
+			DMA_ATTR_FORCE_NON_COHERENT);
 }
 
 static inline void *mhi_alloc_contig_coherent(
