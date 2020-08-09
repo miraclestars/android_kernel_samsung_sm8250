@@ -1,4 +1,5 @@
 config SEC_Y2Q_PROJECT
+	depends on ARCH_KONA
 	select SLUB_DEBUG if SEC_FACTORY
 	select SLUB_DEBUG_ON if SEC_FACTORY
 	default n
@@ -7,6 +8,7 @@ config SEC_Y2Q_PROJECT
 	  Support for Samsung Y2Q Project
 
 config MACH_Y2Q_JPN_SINGLE
+	depends on SEC_Y2Q_PROJECT
 	default n
 	bool "Samsung Y2Q JPN SINGLE"
 	help
