@@ -996,6 +996,7 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
 	if (val >= mhi_cntrl->len) {
 		write_unlock_irq(&mhi_cntrl->pm_lock);
 		MHI_ERR("Invalid bhi offset:%x\n", val);
+		ret = -EINVAL;
 		goto error_bhi_offset;
 	}
 
@@ -1013,6 +1014,7 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
 		if (val >= mhi_cntrl->len) {
 			write_unlock_irq(&mhi_cntrl->pm_lock);
 			MHI_ERR("Invalid bhie offset:%x\n", val);
+			ret = -EINVAL;
 			goto error_bhi_offset;
 		}
 
