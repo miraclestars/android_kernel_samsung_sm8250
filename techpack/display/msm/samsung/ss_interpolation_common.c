@@ -29,6 +29,11 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #define CONTROL_AUTO_BRIGHTNESS_V3 (256)
 #define CONTROL_AUTO_BRIGHTNESS_V4 (512)
 
+#ifdef CONFIG_HYBRID_DC_DIMMING
+const char aor_dc_hex[2] = {0x00, 0x14};
+const char aor_hbm_hex[2] = {0x00, 0x0C};
+#endif
+
 char ss_dimming_mode_debug[][DIMMING_MODE_DEBUG_STRING] = {
 	"SS_FLASH_DIMMING_MODE",
 	"SS_S_DIMMING_AOR_ITP_MODE",
@@ -1427,6 +1432,9 @@ int br_interpolation_generate_event(struct samsung_display_driver_data *vdd,
 			memcpy(buf, hmd_tbl->aor[candela_index], aor_size);
 		break;
 	case GEN_NORMAL_INTERPOLATION_AOR:
+#ifdef CONFIG_HYBRID_DC_DIMMING
+		memcpy(buf, aor_dc_hex, aor_size);
+#else
 		if (vdd->vrr.is_support_brr && ss_is_brr_on(brr_mode)) {
 			/* Bridge RR mode
 			 * - all BRR mode: aor interpolation based on VFP duty. other values: use 60hz bl_tbl
@@ -1488,11 +1496,16 @@ int br_interpolation_generate_event(struct samsung_display_driver_data *vdd,
 			memcpy(buf, ss_itp->normal.br_aor_table[pac_cd_idx].aor_hex_string, aor_size);
 			vdd->br_info.common_br.aor_data = ss_itp->normal.br_aor_table[pac_cd_idx].aor_percent_x10000 / 100;
 		}
+#endif
 		break;
 	case GEN_HBM_INTERPOLATION_AOR:
+#ifdef CONFIG_HYBRID_DC_DIMMING
+		memcpy(buf, aor_hbm_hex, aor_size);
+#else
 		candela_index = find_hbm_candela(vdd, br_tbl);
 		if (candela_index >= 0)
 			memcpy(buf, hbm_tbl->aor[candela_index], aor_size);
+#endif
 		break;
 
 	case GEN_NORMAL_DBV:
