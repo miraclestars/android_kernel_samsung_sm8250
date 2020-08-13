@@ -39,6 +39,14 @@ config SUPPORT_POC_FLASH
 	---help---
 	SUPPORT_POC_FLASH FOR DREAM2 ONLY
 
+config HYBRID_DC_DIMMING
+	depends on DISPLAY_SAMSUNG
+	bool "FORCED HYBRID DC DIMMING"
+	default n
+	---help---
+	Forced dc dimming mode by hijack panel
+	gamma and mdnie color controller.
+
 #
 #	HOW TO MAKE DEF-CONFIG NAME FOR PANEL
 #

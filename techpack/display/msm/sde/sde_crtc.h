@@ -409,6 +409,9 @@ struct sde_crtc_state {
 	struct sde_hw_scaler3_lut_cfg scl3_lut_cfg;
 
 	struct sde_core_perf_params new_perf;
+#ifdef CONFIG_HYBRID_DC_DIMMING
+	struct sde_hw_dim_layer *exposure_dim_layer;
+#endif
 };
 
 enum sde_crtc_irq_state {
