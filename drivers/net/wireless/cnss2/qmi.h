@@ -192,6 +192,9 @@ int coex_antenna_switch_to_wlan_send_sync_msg(struct cnss_plat_data *plat_priv)
 
 static inline
 int coex_antenna_switch_to_mdm_send_sync_msg(struct cnss_plat_data *plat_priv)
+{
+	return 0;
+}
 
 static inline
 int cnss_wlfw_qdss_trace_mem_info_send_sync(struct cnss_plat_data *plat_priv)

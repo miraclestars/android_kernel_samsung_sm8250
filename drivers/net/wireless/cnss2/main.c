@@ -17,6 +17,7 @@
 #include "bus.h"
 #include "debug.h"
 #include "genl.h"
+#include "qmi.h"
 
 #define CNSS_DUMP_FORMAT_VER		0x11
 #define CNSS_DUMP_FORMAT_VER_V2		0x22
