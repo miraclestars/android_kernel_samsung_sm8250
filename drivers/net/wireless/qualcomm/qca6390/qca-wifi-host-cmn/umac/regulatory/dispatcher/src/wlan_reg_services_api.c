@@ -416,6 +416,16 @@ QDF_STATUS regulatory_pdev_open(struct wlan_objmgr_pdev *pdev)
 {
 	struct wlan_objmgr_psoc *parent_psoc;
 	QDF_STATUS status;
+	struct wlan_regulatory_pdev_priv_obj *pdev_priv_obj;
+
+	pdev_priv_obj = reg_get_pdev_obj(pdev);
+
+	if (!IS_VALID_PDEV_REG_OBJ(pdev_priv_obj)) {
+		reg_err("reg pdev private obj is NULL");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	pdev_priv_obj->pdev_opened = true;
 
 	parent_psoc = wlan_pdev_get_psoc(pdev);
 
@@ -431,6 +441,15 @@ QDF_STATUS regulatory_pdev_close(struct wlan_objmgr_pdev *pdev)
 {
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_regulatory_psoc_priv_obj *soc_reg;
+	struct wlan_regulatory_pdev_priv_obj *pdev_priv_obj;
+
+	pdev_priv_obj = reg_get_pdev_obj(pdev);
+	if (!IS_VALID_PDEV_REG_OBJ(pdev_priv_obj)) {
+		reg_err("reg pdev private obj is NULL");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	pdev_priv_obj->pdev_opened = false;
 
 	psoc = wlan_pdev_get_psoc(pdev);
 	soc_reg = reg_get_psoc_obj(psoc);
@@ -485,6 +504,12 @@ uint32_t wlan_reg_chan_to_freq(struct wlan_objmgr_pdev *pdev,
 			       uint32_t chan_num)
 {
 	return reg_chan_to_freq(pdev, chan_num);
+}
+
+uint16_t wlan_reg_legacy_chan_to_freq(struct wlan_objmgr_pdev *pdev,
+				      uint8_t chan_num)
+{
+	return reg_legacy_chan_to_freq(pdev, chan_num);
 }
 
 bool wlan_reg_chan_is_49ghz(struct wlan_objmgr_pdev *pdev,
@@ -707,4 +732,15 @@ enum band_info wlan_reg_chan_to_band(uint32_t chan_num)
 enum channel_enum wlan_reg_get_chan_enum(uint32_t chan_num)
 {
 	return reg_get_chan_enum(chan_num);
+}
+
+bool wlan_reg_is_6ghz_op_class(struct wlan_objmgr_pdev *pdev,
+			       uint8_t op_class)
+{
+	return reg_is_6ghz_op_class(pdev, op_class);
+}
+
+bool wlan_reg_is_6ghz_supported(struct wlan_objmgr_pdev *pdev)
+{
+	return reg_is_6ghz_supported(pdev);
 }

@@ -52,7 +52,7 @@ static void wlan_crypto_set_wapi_key(struct wlan_objmgr_vdev *vdev,
 						0x5c, 0x36, 0x5c, 0x36, 0x5c,
 						0x37};
 
-	if (cipher_type != WLAN_CRYPTO_CIPHER_WAPI_SMS4 ||
+	if (cipher_type != WLAN_CRYPTO_CIPHER_WAPI_SMS4 &&
 	    cipher_type != WLAN_CRYPTO_CIPHER_WAPI_GCM4)
 		return;
 
@@ -207,6 +207,7 @@ QDF_STATUS target_if_crypto_set_key(struct wlan_objmgr_vdev *vdev,
 		/* Set PN check & security type in data path */
 		qdf_mem_copy(&pn[0], &params.key_rsc_ctr, sizeof(pn));
 		cdp_set_pn_check(soc, txrx_vdev, peer, sec_type, pn);
+		cdp_set_key_sec_type(soc, txrx_vdev, peer, sec_type, pairwise);
 		cdp_set_key(soc, peer, pairwise, (uint32_t *)(req->keyval +
 			    WLAN_CRYPTO_IV_SIZE + WLAN_CRYPTO_MIC_LEN));
 	} else {

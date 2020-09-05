@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1170,7 +1170,9 @@ bool scm_filter_match(struct wlan_objmgr_psoc *psoc,
 	 */
 	if (!match && util_scan_entry_is_hidden_ap(db_entry)) {
 		for (i = 0; i < filter->num_of_auth; i++) {
-			if (filter->auth_type[i] == WLAN_AUTH_TYPE_OWE) {
+			if (filter->auth_type[i] == WLAN_AUTH_TYPE_OWE &&
+			    util_is_bssid_match(&filter->bssid_hint,
+						&db_entry->bssid)) {
 				match = true;
 				break;
 			}

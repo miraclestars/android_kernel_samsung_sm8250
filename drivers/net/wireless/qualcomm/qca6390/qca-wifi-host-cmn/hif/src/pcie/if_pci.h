@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -28,6 +28,7 @@
 #include "hif.h"
 #include "cepci.h"
 #include "ce_main.h"
+#include <qdf_threads.h>
 
 #ifdef QCA_HIF_HIA_EXTND
 extern int32_t frac, intval, ar900b_20_targ_clk, qca9888_20_targ_clk;
@@ -45,13 +46,15 @@ struct hif_tasklet_entry {
  * enum hif_pm_runtime_state - Driver States for Runtime Power Management
  * HIF_PM_RUNTIME_STATE_NONE: runtime pm is off
  * HIF_PM_RUNTIME_STATE_ON: runtime pm is active and link is active
- * HIF_PM_RUNTIME_STATE_INPROGRESS: a runtime suspend or resume is in progress
+ * HIF_PM_RUNTIME_STATE_RESUMING: a runtime resume is in progress
+ * HIF_PM_RUNTIME_STATE_SUSPENDING: a runtime suspend is in progress
  * HIF_PM_RUNTIME_STATE_SUSPENDED: the driver is runtime suspended
  */
 enum hif_pm_runtime_state {
 	HIF_PM_RUNTIME_STATE_NONE,
 	HIF_PM_RUNTIME_STATE_ON,
-	HIF_PM_RUNTIME_STATE_INPROGRESS,
+	HIF_PM_RUNTIME_STATE_RESUMING,
+	HIF_PM_RUNTIME_STATE_SUSPENDING,
 	HIF_PM_RUNTIME_STATE_SUSPENDED,
 };
 
@@ -75,11 +78,15 @@ struct hif_pci_pm_stats {
 	u32 suspended;
 	u32 suspend_err;
 	u32 resumed;
-	u32 runtime_get;
-	u32 runtime_put;
+	atomic_t runtime_get;
+	atomic_t runtime_put;
+	atomic_t runtime_get_dbgid[RTPM_ID_MAX];
+	atomic_t runtime_put_dbgid[RTPM_ID_MAX];
+	uint64_t runtime_get_timestamp_dbgid[RTPM_ID_MAX];
+	uint64_t runtime_put_timestamp_dbgid[RTPM_ID_MAX];
 	u32 request_resume;
-	u32 allow_suspend;
-	u32 prevent_suspend;
+	atomic_t allow_suspend;
+	atomic_t prevent_suspend;
 	u32 prevent_suspend_timeout;
 	u32 allow_suspend_timeout;
 	u32 runtime_get_err;
@@ -139,6 +146,8 @@ struct hif_pci_softc {
 	struct list_head prevent_suspend_list;
 	unsigned long runtime_timer_expires;
 	qdf_runtime_lock_t prevent_linkdown_lock;
+	atomic_t pm_dp_rx_busy;
+	qdf_time_t dp_last_busy_timestamp;
 #ifdef WLAN_OPEN_SOURCE
 	struct dentry *pm_dentry;
 #endif
@@ -210,9 +219,5 @@ static inline int hif_pm_runtime_put_auto(struct device *dev)
 	return pm_runtime_put_autosuspend(dev);
 }
 
-static inline int hif_pm_runtime_resume(struct device *dev)
-{
-	return pm_runtime_resume(dev);
-}
 #endif /* FEATURE_RUNTIME_PM */
 #endif /* __ATH_PCI_H__ */

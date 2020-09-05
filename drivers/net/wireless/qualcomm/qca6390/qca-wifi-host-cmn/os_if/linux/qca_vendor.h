@@ -209,7 +209,9 @@
  * @QCA_NL80211_VENDOR_SUBCMD_SPECTRAL_SCAN_START: Start spectral scan. The scan
  *      parameters are specified by enum qca_wlan_vendor_attr_spectral_scan.
  *      This returns a cookie (%QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_COOKIE)
- *      identifying the operation in success case.
+ *      identifying the operation in success case. In failure cases an
+ *      error code (%QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_ERROR_CODE)
+ *      describing the reason for the failure is returned.
  * @QCA_NL80211_VENDOR_SUBCMD_SPECTRAL_SCAN_STOP: Stop spectral scan. This uses
  *      a cookie (%QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_COOKIE) from
  * @QCA_NL80211_VENDOR_SUBCMD_SPECTRAL_SCAN_START to identify the scan to
@@ -350,6 +352,28 @@
  *	binary blobs from application/service to firmware. The attributes
  *	defined in enum qca_wlan_vendor_attr_oem_data_params are used to
  *	deliver the parameters.
+ * @QCA_NL80211_VENDOR_SUBCMD_REQUEST_SAR_LIMITS_EVENT: This acts as an event.
+ *	Host drivers can request the user space entity to set the SAR power
+ *	limits with this event. Accordingly, the user space entity is expected
+ *	to set the SAR power limits. Host drivers can retry this event to the
+ *	user space for the SAR power limits configuration from user space. If
+ *	the driver does not get the SAR power limits from user space for all
+ *	the retried attempts, it can configure a default SAR power limit.
+ * @QCA_NL80211_VENDOR_SUBCMD_UPDATE_STA_INFO: This acts as a vendor event and
+ *	is used to update the information about the station from the driver to
+ *	userspace. Uses attributes from enum
+ *	qca_wlan_vendor_attr_update_sta_info.
+ * @QCA_NL80211_VENDOR_SUBCMD_DRIVER_DISCONNECT_REASON: This acts as an event.
+ *	The host driver initiates the disconnection for scenarios such as beacon
+ *	miss, NUD failure, peer kick out, etc. The disconnection indication
+ *	through cfg80211_disconnected() expects the reason codes from enum
+ *	ieee80211_reasoncode which does not signify these various reasons why
+ *	the driver has triggered the disconnection. This event will be used to
+ *	send the driver specific reason codes by the host driver to userspace.
+ *	Host drivers should trigger this event and pass the respective reason
+ *	code immediately prior to triggering cfg80211_disconnected(). The
+ *	attributes used with this event are defined in enum
+ *	qca_wlan_vendor_attr_driver_disconnect_reason.
  */
 
 enum qca_nl80211_vendor_subcmds {
@@ -565,6 +589,9 @@ enum qca_nl80211_vendor_subcmds {
 	QCA_NL80211_VENDOR_SUBCMD_BEACON_REPORTING = 180,
 	QCA_NL80211_VENDOR_SUBCMD_INTEROP_ISSUES_AP = 181,
 	QCA_NL80211_VENDOR_SUBCMD_OEM_DATA = 182,
+	QCA_NL80211_VENDOR_SUBCMD_GET_SAR_LIMITS_EVENT = 187,
+	QCA_NL80211_VENDOR_SUBCMD_UPDATE_STA_INFO = 188,
+	QCA_NL80211_VENDOR_SUBCMD_DRIVER_DISCONNECT_REASON = 189,
 };
 
 enum qca_wlan_vendor_tos {
@@ -689,6 +716,29 @@ enum qca_wlan_vendor_attr_get_station {
 };
 
 /**
+ * enum qca_wlan_vendor_attr_update_sta_info - Defines attributes
+ * used by QCA_NL80211_VENDOR_SUBCMD_UPDATE_STA_INFO vendor command.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_UPDATE_STA_INFO_CONNECT_CHANNELS: Type is NLA_UNSPEC.
+ * Used in STA mode. This attribute represents the list of channel center
+ * frequencies in MHz (u32) the station has learnt during the last connection
+ * or roaming attempt. This information shall not signify the channels for
+ * an explicit scan request from the user space. Host drivers can update this
+ * information to the user space in both connected and disconnected state.
+ * In the disconnected state this information shall signify the channels
+ * scanned in the last connection/roam attempt that lead to the disconnection.
+ */
+enum qca_wlan_vendor_attr_update_sta_info {
+	QCA_WLAN_VENDOR_ATTR_UPDATE_STA_INFO_INVALID = 0,
+	QCA_WLAN_VENDOR_ATTR_UPDATE_STA_INFO_CONNECT_CHANNELS = 1,
+
+	/* keep last */
+	QCA_WLAN_VENDOR_ATTR_UPDATE_STA_INFO_AFTER_LAST,
+	QCA_WLAN_VENDOR_ATTR_UPDATE_STA_INFO_MAX =
+		QCA_WLAN_VENDOR_ATTR_UPDATE_STA_INFO_AFTER_LAST - 1,
+};
+
+/**
  * enum qca_wlan_802_11_mode - dot11 mode
  * @QCA_WLAN_802_11_MODE_11B: mode B
  * @QCA_WLAN_802_11_MODE_11G: mode G
@@ -779,7 +829,8 @@ enum qca_wlan_auth_type {
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_MAX_PHY_RATE:
  *  Max phy rate of remote station
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_PACKETS:
- *  TX packets to remote station
+ *  Unsigned 32 bit value. Represent the number of all frames from host to
+ *  firmware.
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_BYTES:
  *  TX bytes to remote station
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_RX_PACKETS:
@@ -805,6 +856,54 @@ enum qca_wlan_auth_type {
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_SGI_ENABLE:
  *  Remote station short GI enable/disable
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_PAD: Attribute type for padding
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_RX_RETRY_COUNT:
+ *  Unsigned 32 bit value. Represents the number of retried frames received
+ *  from remote station.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_RX_BC_MC_COUNT:
+ *  Unsigned 32 bit value. Represents the number of broadcast and multicast
+ *  frames received from remote station.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_FAILURE:
+ *  Unsigned 32 bit value. Represents the number of frames which is failed to
+ *  be transmitted.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_AVG_RSSI_PER_CHAIN:
+ *  An array of CHAINS x signed 32 bit value. Represents the average value of
+ *  RSSI per chain calculated for the remote station.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY_SUCCEED:
+ *  Unsigned 32 bit value. Represents the number of frames retried but
+ *  successfully transmitted to remote station.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_RX_LAST_PKT_RSSI:
+ *  Signed 32 bit value. Represents the RSSI calculated by last packet received
+ *  from remote station.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY:
+ *  Unsigned 32 bit value. Represent the number of retried frames from host
+ *  to firmware.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY_EXHAUST:
+ *  Unsigned 32 bit value. Represent the number of frames retried but finally
+ *  failed from host to firmware.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_TOTAL_FW:
+ *  Unsigned 32 bit value. Represent the number of all frames from firmware
+ *  to remote station.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY_FW:
+ *  Unsigned 32 bit value. Represent the number of retried frames from
+ *  firmware to remote station.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY_EXHAUST_FW:
+ *  Unsigned 32 bit value. Represent the number of frames retried but finally
+ *  failed from firmware to remote station.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_BEACON_IES: Binary attribute
+ *  containing the raw information elements from Beacon frames. Represents
+ *  the Beacon frames of the current BSS in the connected state. When queried
+ *  in the disconnected state, these IEs correspond to the last connected BSSID.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_DRIVER_DISCONNECT_REASON: u32, Driver
+ *  disconnect reason for the last disconnection if the disconnection is
+ *  triggered from the host driver. The values are referred from
+ *  enum qca_disconnect_reason_codes. If the disconnect is from
+ *  peer/userspace this value is QCA_DISCONNECT_REASON_UNSPECIFIED.
+ * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_ASSOC_REQ_IES: Binary attribute
+ *  Applicable in AP mode only. It contains the raw information elements
+ *  from assoc request frame of the given peer station. User queries with the
+ *  mac address of peer station when it disconnects. Host driver sends
+ *  assoc request frame of the given station. Host driver doesn't provide
+ *  the IEs when the peer station is still in connected state.
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_AFTER_LAST: After last
  */
 enum qca_wlan_vendor_attr_get_station_info {
@@ -835,6 +934,18 @@ enum qca_wlan_vendor_attr_get_station_info {
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_PAD,
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_RX_RETRY_COUNT,
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_RX_BC_MC_COUNT,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_FAILURE,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_AVG_RSSI_PER_CHAIN,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY_SUCCEED,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_RX_LAST_PKT_RSSI,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY_EXHAUST,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_TOTAL_FW,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY_FW,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_TX_RETRY_EXHAUST_FW,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_BEACON_IES,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_DRIVER_DISCONNECT_REASON,
+	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_ASSOC_REQ_IES,
 
 	/* keep last */
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_AFTER_LAST,
@@ -998,6 +1109,10 @@ enum qca_nl80211_vendor_subcmds_index {
 	QCA_NL80211_VENDOR_SUBCMD_LINK_PROPERTIES_INDEX,
 	QCA_NL80211_VENDOR_SUBCMD_PEER_STATS_CACHE_FLUSH_INDEX,
 	QCA_NL80211_VENDOR_SUBCMD_BEACON_REPORTING_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_ROAM_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_OEM_DATA_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_REQUEST_SAR_LIMITS_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_UPDATE_STA_INFO_INDEX,
 };
 
 /**
@@ -1366,7 +1481,6 @@ enum qca_wlan_vendor_attr {
 		QCA_WLAN_VENDOR_ATTR_MAX = QCA_WLAN_VENDOR_ATTR_AFTER_LAST - 1
 };
 
-#ifdef FEATURE_WLAN_EXTSCAN
 enum qca_wlan_vendor_attr_extscan_config_params {
 	QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_INVALID = 0,
 
@@ -1824,7 +1938,6 @@ enum qca_vendor_attr_interop_issues_ap {
 	QCA_WLAN_VENDOR_ATTR_INTEROP_ISSUES_AP_MAX =
 		QCA_WLAN_VENDOR_ATTR_INTEROP_ISSUES_AP_AFTER_LAST - 1
 };
-#endif
 
 #ifdef WLAN_FEATURE_LINK_LAYER_STATS
 
@@ -2608,49 +2721,344 @@ enum qca_wlan_vendor_attr_pno_config_params {
 };
 
 /**
- * enum qca_wlan_vendor_attr_roaming_config_params - roaming config params
+ * enum qca_scan_freq_list_type: Frequency list types
  *
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_INVALID: Invalid initial value
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_SUBCMD: roaming sub command
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_REQ_ID: Request id
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID_NUM_NETWORKS:
- *	number of whitelist networks
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID_LIST:
- *	Whitelist ssid list
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID:
- *	white list ssid
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_BOOST_THRESHOLD:
- *	'a' band boost threshold
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_PENALTY_THRESHOLD:
- *	'a' band penalty threshold
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_BOOST_FACTOR:
- *	'a' band boost factor
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_PENALTY_FACTOR:
- *	'a' band penalty factor
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_MAX_BOOST:
- *	'a' band max boost
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_LAZY_ROAM_HISTERESYS:
- *	lazy roam histeresys
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_ALERT_ROAM_RSSI_TRIGGER:
- *	alert roam rssi trigger
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_ENABLE:
- *	set lazy roam enable
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PREFS:
- *	set bssid preference
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_NUM_BSSID:
- *	set lazy roam number of bssid
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_BSSID:
- *	set lazy roam bssid
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_RSSI_MODIFIER:
- *	set lazy roam rssi modifier
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS:
- *	set bssid params
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_NUM_BSSID:
- *	set bssid params num bssid
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_BSSID:
- *	set bssid params bssid
- * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_HINT:
- *	flag attribute to specify whether the AP is avoided, or blacklisted.
+ * @QCA_PREFERRED_SCAN_FREQ_LIST: The driver shall use the scan frequency list
+ *	specified with attribute QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST as
+ *	a preferred frequency list for roaming.
+ *
+ * @QCA_SPECIFIC_SCAN_FREQ_LIST: The driver shall use the frequency list
+ *	specified with attribute QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST as
+ *	a specific frequency list for roaming.
+ */
+enum qca_scan_freq_list_type {
+	QCA_PREFERRED_SCAN_FREQ_LIST = 1,
+	QCA_SPECIFIC_SCAN_FREQ_LIST = 2,
+};
+
+/**
+ * enum qca_vendor_attr_scan_freq_list_scheme: Frequency list scheme
+ *
+ * @QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST: An array of unsigned 32-bit values.
+ *	List of frequencies in MHz to be considered for a roam scan.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST_TYPE: Unsigned 32-bit value.
+ *	Type of frequency list scheme being configured/gotten as defined by the
+ *	enum qca_scan_freq_list_type.
+ */
+enum qca_vendor_attr_scan_freq_list_scheme {
+	QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST = 1,
+	QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST_TYPE = 2,
+
+	/* keep last */
+	QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST_SCHEME_AFTER_LAST,
+	QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST_SCHEME_MAX =
+	QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST_SCHEME_AFTER_LAST - 1,
+};
+
+/*
+ * enum qca_vendor_roam_triggers: Bitmap of roaming triggers
+ *
+ * @QCA_ROAM_TRIGGER_REASON_PER: Set if the roam has to be triggered based on
+ *	a bad packet error rates (PER).
+ * @QCA_ROAM_TRIGGER_REASON_BEACON_MISS: Set if the roam has to be triggered
+ *	based on beacon misses from the connected AP.
+ * @QCA_ROAM_TRIGGER_REASON_POOR_RSSI: Set if the roam has to be triggered
+ *	due to poor RSSI of the connected AP.
+ * @QCA_ROAM_TRIGGER_REASON_BETTER_RSSI: Set if the roam has to be triggered
+ *	upon finding a BSSID with a better RSSI than the connected BSSID.
+ *	Here the RSSI of the current BSSID need not be poor.
+ * @QCA_ROAM_TRIGGER_REASON_PERIODIC: Set if the roam has to be triggered
+ *	by triggering a periodic scan to find a better AP to roam.
+ * @QCA_ROAM_TRIGGER_REASON_DENSE: Set if the roam has to be triggered
+ *	when the connected channel environment is too noisy/congested.
+ * @QCA_ROAM_TRIGGER_REASON_BTM: Set if the roam has to be triggered
+ *	when BTM Request frame is received from the connected AP.
+ * @QCA_ROAM_TRIGGER_REASON_BSS_LOAD: Set if the roam has to be triggered
+ *	when the channel utilization is goes above the configured threshold.
+ *
+ * Set the corresponding roam trigger reason bit to consider it for roam
+ * trigger.
+ * Userspace can set multiple bits and send to the driver. The driver shall
+ * consider all of them to trigger/initiate a roam scan.
+ */
+enum qca_vendor_roam_triggers {
+	QCA_ROAM_TRIGGER_REASON_PER		= 1 << 0,
+	QCA_ROAM_TRIGGER_REASON_BEACON_MISS	= 1 << 1,
+	QCA_ROAM_TRIGGER_REASON_POOR_RSSI	= 1 << 2,
+	QCA_ROAM_TRIGGER_REASON_BETTER_RSSI	= 1 << 3,
+	QCA_ROAM_TRIGGER_REASON_PERIODIC	= 1 << 4,
+	QCA_ROAM_TRIGGER_REASON_DENSE		= 1 << 5,
+	QCA_ROAM_TRIGGER_REASON_BTM		= 1 << 6,
+	QCA_ROAM_TRIGGER_REASON_BSS_LOAD	= 1 << 7,
+};
+
+/**
+ * enum qca_vendor_attr_roam_candidate_selection_criteria:
+ *
+ * Each attribute carries a weightage in percentage (%).
+ *
+ * @QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_RSSI: Unsigned 8-bit value.
+ *	Represents the weightage to be given for the RSSI selection
+ *	criteria among other parameters.
+ *
+ * @QCA_ATTR_ROAM_CAND_SEL_CRITERIA_RATE: Unsigned 8-bit value.
+ *	Represents the weightage to be given for the rate selection
+ *	criteria among other parameters.
+ *
+ * @QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_BW: Unsigned 8-bit value.
+ *	Represents the weightage to be given for the band width selection
+ *	criteria among other parameters.
+ *
+ * @QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_BAND: Unsigned 8-bit value.
+ *	Represents the weightage to be given for the band selection
+ *	criteria among other parameters.
+ *
+ * @QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_NSS: Unsigned 8-bit value.
+ *	Represents the weightage to be given for the NSS selection
+ *	criteria among other parameters.
+ *
+ * @QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_CHAN_CONGESTION: Unsigned 8-bit value.
+ *	Represents the weightage to be given for the channel congestion
+ *	selection criteria among other parameters.
+ *
+ * @QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_BEAMFORMING: Unsigned 8-bit value.
+ *	Represents the weightage to be given for the beamforming selection
+ *	criteria among other parameters.
+ *
+ * @QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_OCE_WAN: Unsigned 8-bit value.
+ *	Represents the weightage to be given for the OCE selection
+ *	criteria among other parameters.
+ */
+enum qca_vendor_attr_roam_candidate_selection_criteria {
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_RSSI = 1,
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_RATE = 2,
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_BW = 3,
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_BAND = 4,
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_NSS = 5,
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_CHAN_CONGESTION = 6,
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_BEAMFORMING = 7,
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_SCORE_OCE_WAN = 8,
+
+	/* keep last */
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_RATE_AFTER_LAST,
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_RATE_MAX =
+	QCA_ATTR_ROAM_CAND_SEL_CRITERIA_RATE_AFTER_LAST - 1,
+};
+
+/**
+ * enum qca_vendor_attr_roam_control - Attributes to carry roam configuration
+ *	The following attributes are used to set/get/clear the respective
+ *	configurations to/from the driver.
+ *	For the get, the attribute for the configuration to be queried shall
+ *	carry any of its acceptable values to the driver. In return, the driver
+ *	shall send the configured values within the same attribute to the user
+ *	space.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_ENABLE: Unsigned 8-bit value.
+ *	Signifies to enable/disable roam control in driver.
+ *	1-enable, 0-disable
+ *	Enable: Mandates the driver to do the further roams using the
+ *	configuration parameters set through
+ *	QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_SET.
+ *	Disable: Disables the driver/firmware roaming triggered through
+ *	QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_SET. Further roaming is
+ *	expected to continue with the default configurations.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_STATUS: Unsigned 8-bit value.
+ *	This is used along with QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_GET.
+ *	Roam control status is obtained through this attribute.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_CLEAR_ALL: Flag attribute to indicate the
+ *	complete config set through QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_SET
+ *	is to be cleared in the driver.
+ *	This is used along with QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_CLEAR
+ *	and shall be ignored if used with other sub commands.
+ *	If this attribute is specified along with subcmd
+ *	QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_CLEAR, the driver shall ignore
+ *	all other attributes, if there are any.
+ *	If this attribute is not specified when the subcmd
+ *	QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_CLEAR is sent, the driver shall
+ *	clear the data corresponding to the attributes specified.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_FREQ_LIST_SCHEME: Nested attribute to carry the
+ *	list of frequencies and its type, represented by
+ *	enum qca_vendor_attr_scan_freq_list_scheme.
+ *	Frequency list and its type are mandatory for this attribute to set
+ *	the frequencies.
+ *	Frequency type is mandatory for this attribute to get the frequencies
+ *	and the frequency list is obtained through
+ *	QCA_ATTR_ROAM_CONTROL_SCAN_FREQ_LIST.
+ *	Frequency list type is mandatory for this attribute to clear the
+ *	frequencies.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_SCAN_PERIOD: Unsigned 32-bit value.
+ *	Carries the value of scan period in seconds to set.
+ *	The value of scan period is obtained with the same attribute for get.
+ *	Clears the scan period in the driver when specified with clear command.
+ *	Scan period is the idle time in seconds between each subsequent
+ *	channel scans.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_FULL_SCAN_PERIOD: Unsigned 32-bit value.
+ *	Carries the value of full scan period in seconds to set.
+ *	The value of full scan period is obtained with the same attribute for
+ *	get.
+ *	Clears the full scan period in the driver when specified with clear
+ *	command. Full scan period is the idle period in seconds between two
+ *	successive full channel roam scans.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_TRIGGERS: Unsigned 32-bit value.
+ *	Carries a bitmap of the roam triggers specified in
+ *	enum qca_vendor_roam_triggers.
+ *	The driver shall enable roaming by enabling corresponding roam triggers
+ *	based on the trigger bits sent with this attribute.
+ *	If this attribute is not configured, the driver shall proceed with
+ *	default behavior.
+ *	The bitmap configured is obtained with the same attribute for get.
+ *	Clears the bitmap configured in driver when specified with clear
+ *	command.
+ *
+ * @QCA_ATTR_ROAM_CONTROL_SELECTION_CRITERIA: Nested attribute signifying the
+ *	weightage in percentage (%) to be given for each selection criteria.
+ *	Different roam candidate selection criteria are represented by
+ *	enum qca_vendor_attr_roam_candidate_selection_criteria.
+ *	The driver shall select the roam candidate based on corresponding
+ *	candidate selection scores sent.
+ *
+ *	An empty nested attribute is used to indicate that no specific
+ *	preference score/criteria is configured (i.e., to disable this mechanism
+ *	in the set case and to show that the mechanism is disabled in the get
+ *	case).
+ *
+ *	Userspace can send multiple attributes out of this enum to the driver.
+ *	Since this attribute represents the weight/percentage of preference for
+ *	the respective selection criteria, it is preferred to configure 100%
+ *	total weightage. The value in each attribute or cumulative weight of the
+ *	values in all the nested attributes should not exceed 100%. The driver
+ *	shall reject such configuration.
+ *
+ *	If the weights configured through this attribute are less than 100%,
+ *	the driver shall honor the weights (x%) passed for the corresponding
+ *	selection criteria and choose/distribute rest of the weight (100-x)%
+ *	for the other selection criteria, based on its internal logic.
+ *
+ *	The selection criteria configured is obtained with the same
+ *	attribute for get.
+ *
+ *	Clears the selection criteria configured in the driver when specified
+ *	with clear command.
+ */
+enum qca_vendor_attr_roam_control {
+	QCA_ATTR_ROAM_CONTROL_ENABLE = 1,
+	QCA_ATTR_ROAM_CONTROL_STATUS = 2,
+	QCA_ATTR_ROAM_CONTROL_CLEAR_ALL = 3,
+	QCA_ATTR_ROAM_CONTROL_FREQ_LIST_SCHEME = 4,
+	QCA_ATTR_ROAM_CONTROL_SCAN_PERIOD = 5,
+	QCA_ATTR_ROAM_CONTROL_FULL_SCAN_PERIOD = 6,
+	QCA_ATTR_ROAM_CONTROL_TRIGGERS = 7,
+	QCA_ATTR_ROAM_CONTROL_SELECTION_CRITERIA = 8,
+
+	/* keep last */
+	QCA_ATTR_ROAM_CONTROL_AFTER_LAST,
+	QCA_ATTR_ROAM_CONTROL_MAX =
+	QCA_ATTR_ROAM_CONTROL_AFTER_LAST - 1,
+};
+
+/**
+ * enum qca_wlan_vendor_attr_roaming_config_params: Attributes for data used by
+ * QCA_NL80211_VENDOR_SUBCMD_ROAM sub command.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_SUBCMD: Unsigned 32-bit value.
+ *	Represents the different roam sub commands referred by
+ *	enum qca_wlan_vendor_roaming_subcmd.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_REQ_ID: Unsigned 32-bit value.
+ *	Represents the Request ID for the specific set of commands.
+ *	This also helps to map specific set of commands to the respective
+ *	ID / client. e.g., helps to identify the user entity configuring the
+ *	Blacklist BSSID and accordingly clear the respective ones with the
+ *	matching ID.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID_NUM_NETWORKS: Unsigned
+ *	32-bit value.Represents the number of whitelist SSIDs configured.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID_LIST: Nested attribute
+ *	to carry the list of Whitelist SSIDs.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID: SSID (binary attribute,
+ *	0..32 octets). Represents the white list SSID. Whitelist SSIDs
+ *	represent the list of SSIDs to which the firmware/driver can consider
+ *	to roam to.
+ *
+ * The following PARAM_A_BAND_XX attributes are applied to 5GHz BSSIDs when
+ * comparing with a 2.4GHz BSSID. They are not applied when comparing two
+ * 5GHz BSSIDs.The following attributes are set through the Roaming SUBCMD -
+ * QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_EXTSCAN_ROAM_PARAMS.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_BOOST_THRESHOLD: Signed 32-bit
+ *	value, RSSI threshold above which 5GHz RSSI is favored.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_PENALTY_THRESHOLD: Signed 32-bit
+ *	value, RSSI threshold below which 5GHz RSSI is penalized.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_BOOST_FACTOR: Unsigned 32-bit
+ *	value, factor by which 5GHz RSSI is boosted.
+ *	boost=(RSSI_measured-5GHz_boost_threshold)*5GHz_boost_factor
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_PENALTY_FACTOR: Unsigned 32-bit
+ *	value, factor by which 5GHz RSSI is penalized.
+ *	penalty=(5GHz_penalty_threshold-RSSI_measured)*5GHz_penalty_factor
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_A_BAND_MAX_BOOST: Unsigned 32-bit
+ *	value, maximum boost that can be applied to a 5GHz RSSI.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_LAZY_ROAM_HISTERESYS: Unsigned 32-bit
+ *	value, boost applied to current BSSID to ensure the currently
+ *	associated BSSID is favored so as to prevent ping-pong situations.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_ALERT_ROAM_RSSI_TRIGGER: Signed 32-bit
+ *	value, RSSI below which "Alert" roam is enabled.
+ *	"Alert" mode roaming - firmware is "urgently" hunting for another BSSID
+ *	because the RSSI is low, or because many successive beacons have been
+ *	lost or other bad link conditions.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_ENABLE: Unsigned 32-bit
+ *	value. 1-Enable, 0-Disable. Represents "Lazy" mode, where
+ *	firmware is hunting for a better BSSID or white listed SSID even though
+ *	the RSSI of the link is good. The parameters enabling the roaming are
+ *	configured through the PARAM_A_BAND_XX attrbutes.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PREFS: Nested attribute,
+ *	represents the BSSIDs preferred over others while evaluating them
+ *	for the roaming.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_NUM_BSSID: Unsigned
+ *	32-bit value. Represents the number of preferred BSSIDs set.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_BSSID: 6-byte MAC
+ *	address representing the BSSID to be preferred.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_RSSI_MODIFIER: Signed
+ *	32-bit value, representing the modifier to be applied to the RSSI of
+ *	the BSSID for the purpose of comparing it with other roam candidate.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS: Nested attribute,
+ *	represents the BSSIDs to get blacklisted for roaming.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_NUM_BSSID: Unsigned
+ *	32-bit value, represents the number of blacklisted BSSIDs.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_BSSID: 6-byte MAC
+ *	address representing the Blacklisted BSSID.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_HINT: Flag attribute,
+ *	indicates this BSSID blacklist as a hint to the driver. The driver can
+ *	select this BSSID in the worst case (when no other BSSIDs are better).
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_CONTROL: Nested attribute to
+ *	set/get/clear the roam control config as
+ *	defined @enum qca_vendor_attr_roam_control.
+ *
  * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_AFTER_LAST: After last
  * @QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_MAX: Max
  */
@@ -2684,6 +3092,8 @@ enum qca_wlan_vendor_attr_roaming_config_params {
 	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_BSSID = 20,
 	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_HINT = 21,
 
+	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_CONTROL = 22,
+
 	/* keep last */
 	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_AFTER_LAST,
 	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_MAX =
@@ -2691,31 +3101,64 @@ enum qca_wlan_vendor_attr_roaming_config_params {
 };
 
 /**
- * enum qca_wlan_vendor_attr_roam_subcmd - roam sub commands
+ * enum qca_wlan_vendor_roaming_subcmd: Referred by
+ * QCA_WLAN_VENDOR_ATTR_ROAMING_SUBCMD.
  *
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_INVALID: Invalid initial value
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SSID_WHITE_LIST: ssid white list
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_EXTSCAN_ROAM_PARAMS: roam params
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_LAZY_ROAM: set lazy roam
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_BSSID_PREFS: set bssid prefs
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_BSSID_PARAMS: set bssid params
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_BLACKLIST_BSSID: set blacklist bssid
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_AFTER_LAST: after last
- * @QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_MAX: subcmd max
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_SSID_WHITE_LIST: Sub command to
+ *	configure the white list SSIDs. These are configured through
+ *	the following attributes.
+ *	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID_NUM_NETWORKS,
+ *	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID_LIST,
+ *	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_WHITE_LIST_SSID
+ *
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_EXTSCAN_ROAM_PARAMS: Sub command to
+ *	configure the Roam params. These parameters are evaluated on the extscan
+ *	results. Refers the attributes PARAM_A_BAND_XX above to configure the
+ *	params.
+ *
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_LAZY_ROAM: Sets the Lazy roam. Uses
+ *	the attribute QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_LAZY_ROAM_ENABLE
+ *	to enable/disable Lazy roam.
+ *
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_BSSID_PREFS: Sets the BSSID
+ *	preference. Contains the attribute
+ *	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PREFS to set the BSSID
+ *	preference.
+ *
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_BSSID_PARAMS: set bssid params
+ *
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_BLACKLIST_BSSID: Sets the Blacklist
+ *	BSSIDs. Refers QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_SET_BSSID_PARAMS to
+ *	set the same.
+ *
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_SET: Command to set the
+ *	roam control config to the driver with the attribute
+ *	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_CONTROL.
+ *
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_GET: Command to obtain the
+ *	roam control config from driver with the attribute
+ *	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_CONTROL.
+ *	For the get, the attribute for the configuration to be queried shall
+ *	carry any of its acceptable value to the driver. In return, the driver
+ *	shall send the configured values within the same attribute to the user
+ *	space.
+ *
+ * @QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_CLEAR: Command to clear the
+ *	roam control config in the driver with the attribute
+ *	QCA_WLAN_VENDOR_ATTR_ROAMING_PARAM_CONTROL.
+ *	The driver shall continue with its default roaming behavior when data
+ *	corresponding to an attribute is cleared.
  */
-enum qca_wlan_vendor_attr_roam_subcmd {
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_INVALID = 0,
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SSID_WHITE_LIST = 1,
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_EXTSCAN_ROAM_PARAMS = 2,
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_LAZY_ROAM = 3,
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_BSSID_PREFS = 4,
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_BSSID_PARAMS = 5,
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_SET_BLACKLIST_BSSID = 6,
-
-	/* KEEP LAST */
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_AFTER_LAST,
-	QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_MAX =
-		QCA_WLAN_VENDOR_ATTR_ROAM_SUBCMD_AFTER_LAST - 1,
+enum qca_wlan_vendor_roaming_subcmd {
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_SSID_WHITE_LIST = 1,
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_EXTSCAN_ROAM_PARAMS = 2,
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_LAZY_ROAM = 3,
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_BSSID_PREFS = 4,
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_BSSID_PARAMS = 5,
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_SET_BLACKLIST_BSSID = 6,
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_SET = 7,
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_GET = 8,
+	QCA_WLAN_VENDOR_ROAMING_SUBCMD_CONTROL_CLEAR = 9,
 };
 
 /**
@@ -3654,6 +4097,11 @@ enum qca_wlan_vendor_attr_config {
 	 * further disassoc/deauth frames.
 	 */
 	QCA_WLAN_VENDOR_ATTR_DISCONNECT_IES = 58,
+
+	/* 8-bit unsigned value for ELNA bypass.
+	 * 1-Enable, 0-Disable
+	 */
+	QCA_WLAN_VENDOR_ATTR_CONFIG_ELNA_BYPASS = 59,
 
 	/* keep last */
 	QCA_WLAN_VENDOR_ATTR_CONFIG_AFTER_LAST,
@@ -5778,6 +6226,35 @@ enum qca_wlan_vendor_attr_spectral_scan {
 	 * qca_wlan_vendor_attr_spectral_scan_request_type.
 	 */
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_REQUEST_TYPE = 23,
+	/* This specifies the frequency span over which spectral
+	 * scan would be carried out. Its value depends on the
+	 * value of QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_MODE and
+	 * the relation is as follows.
+	 * QCA_WLAN_VENDOR_SPECTRAL_SCAN_MODE_NORMAL
+	 *    Not applicable. Spectral scan would happen in the
+	 *    operating span.
+	 * QCA_WLAN_VENDOR_SPECTRAL_SCAN_MODE_AGILE
+	 *    Center frequency (in MHz) of the span of interest or
+	 *    for convenience, center frequency (in MHz) of any channel
+	 *    in the span of interest. If agile spectral scan is initiated
+	 *    without setting a valid frequency it returns the error code
+	 *    (QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_PARAM_NOT_INITIALIZED).
+	 * u32 attribute.
+	 */
+	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_CONFIG_FREQUENCY = 24,
+	/* Spectral scan mode. u32 attribute.
+	 * It uses values defined in enum qca_wlan_vendor_spectral_scan_mode.
+	 * If this attribute is not present, it is assumed to be
+	 * normal mode (QCA_WLAN_VENDOR_SPECTRAL_SCAN_MODE_NORMAL).
+	 */
+	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_MODE = 25,
+	/* Spectral scan error code. u32 attribute.
+	 * It uses values defined in enum
+	 * qca_wlan_vendor_spectral_scan_error_code.
+	 * This attribute is included only in failure scenarios.
+	 */
+	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_ERROR_CODE = 26,
+
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_CONFIG_AFTER_LAST,
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_CONFIG_MAX =
 		QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_CONFIG_AFTER_LAST - 1,
@@ -5855,6 +6332,8 @@ enum qca_wlan_vendor_attr_spectral_cap {
 	 * u8 attribute.
 	 */
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_CAP_DEFAULT_AGC_MAX_GAIN = 10,
+	/* Flag attribute to indicate agile spectral scan capability */
+	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_CAP_AGILE_SPECTRAL = 11,
 
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_CAP_AFTER_LAST,
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_CAP_MAX =
@@ -5871,6 +6350,13 @@ enum qca_wlan_vendor_attr_spectral_scan_status {
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_STATUS_IS_ENABLED = 1,
 	/* Flag attribute to indicate whether spectral scan is in progress*/
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_STATUS_IS_ACTIVE = 2,
+	/* Spectral scan mode. u32 attribute.
+	 * It uses values defined in enum qca_wlan_vendor_spectral_scan_mode.
+	 * If this attribute is not present, normal mode
+	 * (QCA_WLAN_VENDOR_SPECTRAL_SCAN_MODE_NORMAL is assumed to be
+	 * requested.
+	 */
+	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_STATUS_MODE = 3,
 
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_STATUS_AFTER_LAST,
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_STATUS_MAX =
@@ -5929,6 +6415,43 @@ enum qca_wlan_vendor_attr_spectral_scan_request_type {
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_REQUEST_TYPE_SCAN_AND_CONFIG,
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_REQUEST_TYPE_SCAN,
 	QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_REQUEST_TYPE_CONFIG,
+};
+
+/**
+ * qca_wlan_vendor_spectral_scan_mode: Attribute values for
+ * QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_MODE in the vendor subcmd
+ * QCA_NL80211_VENDOR_SUBCMD_SPECTRAL_SCAN_START and
+ * QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_STATUS_MODE in the vendor subcmd
+ * QCA_NL80211_VENDOR_SUBCMD_SPECTRAL_SCAN_GET_STATUS. This represents the
+ * spectral scan modes.
+ * @QCA_WLAN_VENDOR_SPECTRAL_SCAN_MODE_NORMAL: Normal spectral scan:
+ * spectral scan in the current operating span.
+ * @QCA_WLAN_VENDOR_SPECTRAL_SCAN_MODE_AGILE: Agile spectral scan:
+ * spectral scan in the configured agile span.
+ */
+enum qca_wlan_vendor_spectral_scan_mode {
+	QCA_WLAN_VENDOR_SPECTRAL_SCAN_MODE_NORMAL = 0,
+	QCA_WLAN_VENDOR_SPECTRAL_SCAN_MODE_AGILE = 1,
+};
+
+/**
+ * qca_wlan_vendor_spectral_scan_error_code: Attribute values for
+ * QCA_WLAN_VENDOR_ATTR_SPECTRAL_SCAN_ERROR_CODE in the vendor subcmd
+ * QCA_NL80211_VENDOR_SUBCMD_SPECTRAL_SCAN_START.
+ * @QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_PARAM_UNSUPPORTED: Changing the value
+ * of a parameter is not supported.
+ * @QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_MODE_UNSUPPORTED: Requested spectral scan
+ * mode is not supported.
+ * @QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_PARAM_INVALID_VALUE: A parameter
+ * has invalid value.
+ * @QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_PARAM_NOT_INITIALIZED: A parameter
+ * is not initialized.
+ */
+enum qca_wlan_vendor_spectral_scan_error_code {
+	QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_PARAM_UNSUPPORTED = 0,
+	QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_MODE_UNSUPPORTED = 1,
+	QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_PARAM_INVALID_VALUE = 2,
+	QCA_WLAN_VENDOR_SPECTRAL_SCAN_ERR_PARAM_NOT_INITIALIZED = 3,
 };
 
 /**
@@ -7346,5 +7869,104 @@ enum qca_wlan_vendor_attr_oem_data_params {
 	QCA_WLAN_VENDOR_ATTR_OEM_DATA_PARAMS_AFTER_LAST,
 	QCA_WLAN_VENDOR_ATTR_OEM_DATA_PARAMS_MAX =
 		QCA_WLAN_VENDOR_ATTR_OEM_DATA_PARAMS_AFTER_LAST - 1
+};
+
+/**
+ * enum qca_disconnect_reason_codes - Specifies driver disconnect reason codes.
+ * Used when the driver triggers the STA to disconnect from the AP.
+ *
+ * @QCA_DISCONNECT_REASON_UNSPECIFIED: The host driver triggered the
+ * disconnection with the AP due to unspecified reasons.
+ *
+ * @QCA_DISCONNECT_REASON_INTERNAL_ROAM_FAILURE: The host driver triggered the
+ * disconnection with the AP due to a roaming failure. This roaming is triggered
+ * internally (host driver/firmware).
+ *
+ * @QCA_DISCONNECT_REASON_EXTERNAL_ROAM_FAILURE: The driver disconnected from
+ * the AP when the user/external triggered roaming fails.
+ *
+ * @QCA_DISCONNECT_REASON_GATEWAY_REACHABILITY_FAILURE: This reason code is used
+ * by the host driver whenever gateway reachability failure is detected and the
+ * driver disconnects with AP.
+ *
+ * @QCA_DISCONNECT_REASON_UNSUPPORTED_CHANNEL_CSA: The driver disconnected from
+ * the AP on a channel switch announcement from it with an unsupported channel.
+ *
+ * @QCA_DISCONNECT_REASON_OPER_CHANNEL_DISABLED_INDOOR: On a concurrent AP start
+ * with indoor channels disabled and if the STA is connected on one of these
+ * disabled channels, the host driver disconnected the STA with this reason
+ * code.
+ *
+ * @QCA_DISCONNECT_REASON_OPER_CHANNEL_USER_DISABLED: Disconnection due to an
+ * explicit request from the user to disable the current operating channel.
+ *
+ * @QCA_DISCONNECT_REASON_DEVICE_RECOVERY: STA disconnected from the AP due to
+ * the internal host driver/firmware recovery.
+ *
+ * @QCA_DISCONNECT_REASON_KEY_TIMEOUT: The driver triggered the disconnection on
+ * a timeout for the key installations from the user space.
+ *
+ * @QCA_DISCONNECT_REASON_OPER_CHANNEL_BAND_CHANGE: The dDriver disconnected the
+ * STA on a band change request from the user space to a different band from the
+ * current operation channel/band.
+ *
+ * @QCA_DISCONNECT_REASON_IFACE_DOWN: The STA disconnected from the AP on an
+ * interface down trigger from the user space.
+ *
+ * @QCA_DISCONNECT_REASON_PEER_XRETRY_FAIL: The host driver disconnected the
+ * STA on getting continuous transmission failures for multiple Data frames.
+ *
+ * @QCA_DISCONNECT_REASON_PEER_INACTIVITY: The STA does a keep alive
+ * notification to the AP by transmitting NULL/G-ARP frames. This disconnection
+ * represents inactivity from AP on such transmissions.
+
+ * @QCA_DISCONNECT_REASON_SA_QUERY_TIMEOUT: This reason code is used on
+ * disconnection when SA Query times out (AP does not respond to SA Query).
+ *
+ * @QCA_DISCONNECT_REASON_BEACON_MISS_FAILURE: The host driver disconnected the
+ * STA on missing the beacons continuously from the AP.
+ *
+ * @QCA_DISCONNECT_REASON_CHANNEL_SWITCH_FAILURE: Disconnection due to STA not
+ * able to move to the channel mentioned by the AP in CSA.
+ *
+ * @QCA_DISCONNECT_REASON_USER_TRIGGERED: User triggered disconnection.
+ */
+enum qca_disconnect_reason_codes {
+	QCA_DISCONNECT_REASON_UNSPECIFIED = 0,
+	QCA_DISCONNECT_REASON_INTERNAL_ROAM_FAILURE = 1,
+	QCA_DISCONNECT_REASON_EXTERNAL_ROAM_FAILURE = 2,
+	QCA_DISCONNECT_REASON_GATEWAY_REACHABILITY_FAILURE = 3,
+	QCA_DISCONNECT_REASON_UNSUPPORTED_CHANNEL_CSA = 4,
+	QCA_DISCONNECT_REASON_OPER_CHANNEL_DISABLED_INDOOR = 5,
+	QCA_DISCONNECT_REASON_OPER_CHANNEL_USER_DISABLED = 6,
+	QCA_DISCONNECT_REASON_DEVICE_RECOVERY = 7,
+	QCA_DISCONNECT_REASON_KEY_TIMEOUT = 8,
+	QCA_DISCONNECT_REASON_OPER_CHANNEL_BAND_CHANGE = 9,
+	QCA_DISCONNECT_REASON_IFACE_DOWN = 10,
+	QCA_DISCONNECT_REASON_PEER_XRETRY_FAIL = 11,
+	QCA_DISCONNECT_REASON_PEER_INACTIVITY = 12,
+	QCA_DISCONNECT_REASON_SA_QUERY_TIMEOUT = 13,
+	QCA_DISCONNECT_REASON_BEACON_MISS_FAILURE = 14,
+	QCA_DISCONNECT_REASON_CHANNEL_SWITCH_FAILURE = 15,
+	QCA_DISCONNECT_REASON_USER_TRIGGERED = 16,
+};
+
+/**
+ * enum qca_wlan_vendor_attr_driver_disconnect_reason - Defines attributes
+ * used by %QCA_NL80211_VENDOR_SUBCMD_DRIVER_DISCONNECT_REASON vendor command.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_DRIVER_DISCONNECT_REASCON_CODE: u32 attribute.
+ * This attribute represents the driver specific reason codes (local
+ * driver/firmware initiated reasons for disconnection) defined
+ * in enum qca_disconnect_reason_codes.
+ */
+enum qca_wlan_vendor_attr_driver_disconnect_reason {
+	QCA_WLAN_VENDOR_ATTR_DRIVER_DISCONNECT_REASON_INVALID = 0,
+	QCA_WLAN_VENDOR_ATTR_DRIVER_DISCONNECT_REASCON_CODE = 1,
+
+	/* keep last */
+	QCA_WLAN_VENDOR_ATTR_DRIVER_DISCONNECT_REASON_AFTER_LAST,
+	QCA_WLAN_VENDOR_ATTR_DRIVER_DISCONNECT_REASON_MAX =
+	QCA_WLAN_VENDOR_ATTR_DRIVER_DISCONNECT_REASON_AFTER_LAST - 1,
 };
 #endif

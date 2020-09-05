@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -26,8 +26,11 @@
  */
 static qdf_self_recovery_callback	self_recovery_cb;
 static qdf_is_fw_down_callback		is_fw_down_cb;
+static qdf_is_driver_unloading_callback is_driver_unloading_cb;
 static qdf_is_recovering_callback	is_recovering_cb;
 static qdf_is_drv_connected_callback    is_drv_connected_cb;
+static qdf_wmi_send_over_qmi_callback _wmi_send_recv_qmi_cb;
+static qdf_is_drv_supported_callback    is_drv_supported_cb;
 
 void qdf_register_fw_down_callback(qdf_is_fw_down_callback is_fw_down)
 {
@@ -46,8 +49,37 @@ bool qdf_is_fw_down(void)
 
 	return is_fw_down_cb();
 }
-
 qdf_export_symbol(qdf_is_fw_down);
+
+void qdf_register_wmi_send_recv_qmi_callback(qdf_wmi_send_over_qmi_callback
+					     wmi_send_recv_qmi_cb)
+{
+	_wmi_send_recv_qmi_cb = wmi_send_recv_qmi_cb;
+}
+
+qdf_export_symbol(qdf_register_wmi_send_recv_qmi_callback);
+
+QDF_STATUS qdf_wmi_send_recv_qmi(void *buf, uint32_t len, void *cb_ctx,
+				 qdf_wmi_recv_qmi_cb wmi_recv_qmi_cb)
+{
+	if (!_wmi_send_recv_qmi_cb) {
+		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
+			  "Platform callback for WMI over QMI not registered");
+			return QDF_STATUS_E_INVAL;
+	}
+
+	return _wmi_send_recv_qmi_cb(buf, len, cb_ctx, wmi_recv_qmi_cb);
+}
+
+qdf_export_symbol(qdf_wmi_send_recv_qmi);
+
+void qdf_register_is_driver_unloading_callback(
+				qdf_is_driver_unloading_callback callback)
+{
+	is_driver_unloading_cb = callback;
+}
+
+qdf_export_symbol(qdf_register_is_driver_unloading_callback);
 
 void qdf_register_self_recovery_callback(qdf_self_recovery_callback callback)
 {
@@ -72,6 +104,15 @@ void qdf_register_recovering_state_query_callback(
 {
 	is_recovering_cb = is_recovering;
 }
+
+bool qdf_is_driver_unloading(void)
+{
+	if (is_driver_unloading_cb)
+		return is_driver_unloading_cb();
+	return false;
+}
+
+qdf_export_symbol(qdf_is_driver_unloading);
 
 bool qdf_is_recovering(void)
 {
@@ -126,3 +167,31 @@ bool qdf_is_drv_connected(void)
 	return is_drv_connected_cb();
 }
 qdf_export_symbol(qdf_is_drv_connected);
+
+void qdf_check_state_before_panic(void)
+{
+	if (!qdf_is_recovering() && !qdf_is_fw_down())
+		QDF_BUG(0);
+}
+
+qdf_export_symbol(qdf_check_state_before_panic);
+
+void qdf_register_drv_supported_callback(qdf_is_drv_supported_callback
+					 is_drv_supported)
+{
+	is_drv_supported_cb = is_drv_supported;
+}
+
+qdf_export_symbol(qdf_register_drv_supported_callback);
+
+bool qdf_is_drv_supported(void)
+{
+	if (!is_drv_supported_cb) {
+		qdf_err("drv supported callback is not registered");
+		return false;
+	}
+
+	return is_drv_supported_cb();
+}
+
+qdf_export_symbol(qdf_is_drv_supported);

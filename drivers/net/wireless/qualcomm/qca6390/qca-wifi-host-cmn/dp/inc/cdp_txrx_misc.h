@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -115,11 +115,13 @@ cdp_set_wisa_mode(ol_txrx_soc_handle soc, struct cdp_vdev *vdev, bool enable)
 /**
  * cdp_data_stall_cb_register() - register data stall callback
  * @soc - data path soc handle
+ * @pdev - device instance pointer
  * @cb - callback function
  *
  * Return: QDF_STATUS_SUCCESS register success
  */
 static inline QDF_STATUS cdp_data_stall_cb_register(ol_txrx_soc_handle soc,
+						    struct cdp_pdev *pdev,
 						    data_stall_detect_cb cb)
 {
 	if (!soc || !soc->ops || !soc->ops->misc_ops) {
@@ -129,18 +131,22 @@ static inline QDF_STATUS cdp_data_stall_cb_register(ol_txrx_soc_handle soc,
 	}
 
 	if (soc->ops->misc_ops->txrx_data_stall_cb_register)
-		return soc->ops->misc_ops->txrx_data_stall_cb_register(cb);
+		return soc->ops->misc_ops->txrx_data_stall_cb_register(
+								pdev,
+								cb);
 	return QDF_STATUS_SUCCESS;
 }
 
 /**
  * cdp_data_stall_cb_deregister() - de-register data stall callback
  * @soc - data path soc handle
+ * @pdev - device instance pointer
  * @cb - callback function
  *
  * Return: QDF_STATUS_SUCCESS de-register success
  */
 static inline QDF_STATUS cdp_data_stall_cb_deregister(ol_txrx_soc_handle soc,
+						      struct cdp_pdev *pdev,
 						      data_stall_detect_cb cb)
 {
 	if (!soc || !soc->ops || !soc->ops->misc_ops) {
@@ -150,13 +156,16 @@ static inline QDF_STATUS cdp_data_stall_cb_deregister(ol_txrx_soc_handle soc,
 	}
 
 	if (soc->ops->misc_ops->txrx_data_stall_cb_deregister)
-		return soc->ops->misc_ops->txrx_data_stall_cb_deregister(cb);
+		return soc->ops->misc_ops->txrx_data_stall_cb_deregister(
+								pdev,
+								cb);
 	return QDF_STATUS_SUCCESS;
 }
 
 /**
  * cdp_post_data_stall_event() - post data stall event
  * @soc - data path soc handle
+ * @pdev - device instance pointer
  * @indicator: Module triggering data stall
  * @data_stall_type: data stall event type
  * @pdev_id: pdev id
@@ -167,6 +176,7 @@ static inline QDF_STATUS cdp_data_stall_cb_deregister(ol_txrx_soc_handle soc,
  */
 static inline void
 cdp_post_data_stall_event(ol_txrx_soc_handle soc,
+			  struct cdp_pdev *pdev,
 			  enum data_stall_log_event_indicator indicator,
 			  enum data_stall_log_event_type data_stall_type,
 			  uint32_t pdev_id, uint32_t vdev_id_bitmap,
@@ -184,6 +194,7 @@ cdp_post_data_stall_event(ol_txrx_soc_handle soc,
 		return;
 
 	soc->ops->misc_ops->txrx_post_data_stall_event(
+				pdev,
 				indicator, data_stall_type, pdev_id,
 				vdev_id_bitmap, recovery_type);
 }
@@ -670,5 +681,51 @@ static inline void cdp_vdev_set_driver_del_ack_enable(ol_txrx_soc_handle soc,
 	if (soc->ops->misc_ops->vdev_set_driver_del_ack_enable)
 		return soc->ops->misc_ops->vdev_set_driver_del_ack_enable(
 			vdev_id, rx_packets, time_in_ms, high_th, low_th);
+}
+
+/**
+ * cdp_txrx_ext_stats_request(): request dp tx and rx extended stats
+ * @soc: soc handle
+ * @pdev: pdev handle
+ * @req: stats request structure to fill
+ *
+ * return: status
+ */
+static inline QDF_STATUS
+cdp_txrx_ext_stats_request(ol_txrx_soc_handle soc, struct cdp_pdev *pdev,
+			   struct cdp_txrx_ext_stats *req)
+{
+	if (!soc || !soc->ops || !soc->ops->misc_ops || !req) {
+		QDF_TRACE(QDF_MODULE_ID_CDP, QDF_TRACE_LEVEL_DEBUG,
+			  "%s: Invalid Instance:", __func__);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (soc->ops->misc_ops->txrx_ext_stats_request)
+		return soc->ops->misc_ops->txrx_ext_stats_request(pdev, req);
+
+	return QDF_STATUS_SUCCESS;
+}
+
+/**
+ * cdp_request_rx_hw_stats(): request rx hw stats
+ * @soc: soc handle
+ * @vdev: vdev handle
+ *
+ * return: none
+ */
+static inline QDF_STATUS
+cdp_request_rx_hw_stats(ol_txrx_soc_handle soc, uint8_t vdev_id)
+{
+	if (!soc || !soc->ops || !soc->ops->misc_ops) {
+		QDF_TRACE(QDF_MODULE_ID_CDP, QDF_TRACE_LEVEL_DEBUG,
+			  "%s: Invalid Instance:", __func__);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (soc->ops->misc_ops->request_rx_hw_stats)
+		return soc->ops->misc_ops->request_rx_hw_stats(soc, vdev_id);
+
+	return QDF_STATUS_SUCCESS;
 }
 #endif /* _CDP_TXRX_MISC_H_ */

@@ -93,6 +93,23 @@ extern uint8_t
 dp_cpu_ring_map[DP_NSS_CPU_RING_MAP_MAX][WLAN_CFG_INT_NUM_CONTEXTS];
 #endif
 
+#define DP_MAX_TIMER_EXEC_TIME_TICKS \
+		(QDF_LOG_TIMESTAMP_CYCLES_PER_10_US * 100 * 20)
+
+/**
+ * enum timer_yield_status - yield status code used in monitor mode timer.
+ * @DP_TIMER_NO_YIELD: do not yield
+ * @DP_TIMER_WORK_DONE: yield because work is done
+ * @DP_TIMER_WORK_EXHAUST: yield because work quota is exhausted
+ * @DP_TIMER_TIME_EXHAUST: yield due to time slot exhausted
+ */
+enum timer_yield_status {
+	DP_TIMER_NO_YIELD,
+	DP_TIMER_WORK_DONE,
+	DP_TIMER_WORK_EXHAUST,
+	DP_TIMER_TIME_EXHAUST,
+};
+
 #if DP_PRINT_ENABLE
 #include <stdarg.h>       /* va_list */
 #include <qdf_types.h> /* qdf_vprint */
@@ -114,7 +131,6 @@ enum {
 	/* INFO2 - include non-fundamental but infrequent events */
 	DP_PRINT_LEVEL_INFO2,
 };
-
 
 #define dp_print(level, fmt, ...) do { \
 	if (level <= g_txrx_print_level) \
@@ -464,6 +480,7 @@ static inline void dp_update_pdev_ingress_stats(struct dp_pdev *tgtobj,
 	DP_STATS_AGGR(tgtobj, srcobj, tx_i.raw.dma_map_error);
 	DP_STATS_AGGR_PKT(tgtobj, srcobj, tx_i.tso.tso_pkt);
 	DP_STATS_AGGR(tgtobj, srcobj, tx_i.tso.dropped_host.num);
+	DP_STATS_AGGR(tgtobj, srcobj, tx_i.tso.tso_no_mem_dropped.num);
 	DP_STATS_AGGR(tgtobj, srcobj, tx_i.tso.dropped_target);
 	DP_STATS_AGGR(tgtobj, srcobj, tx_i.sg.dropped_host.num);
 	DP_STATS_AGGR(tgtobj, srcobj, tx_i.sg.dropped_target);
@@ -740,8 +757,10 @@ extern void dp_peer_find_hash_remove(struct dp_soc *soc, struct dp_peer *peer);
 extern void dp_peer_find_hash_erase(struct dp_soc *soc);
 extern void dp_peer_rx_init(struct dp_pdev *pdev, struct dp_peer *peer);
 void dp_peer_tx_init(struct dp_pdev *pdev, struct dp_peer *peer);
-extern void dp_peer_cleanup(struct dp_vdev *vdev, struct dp_peer *peer);
-extern void dp_peer_rx_cleanup(struct dp_vdev *vdev, struct dp_peer *peer);
+void dp_peer_cleanup(struct dp_vdev *vdev, struct dp_peer *peer,
+		     bool reuse);
+void dp_peer_rx_cleanup(struct dp_vdev *vdev, struct dp_peer *peer,
+			bool reuse);
 extern void dp_peer_unref_delete(void *peer_handle);
 extern void dp_rx_discard(struct dp_vdev *vdev, struct dp_peer *peer,
 	unsigned tid, qdf_nbuf_t msdu_list);
@@ -853,11 +872,16 @@ QDF_STATUS dp_h2t_ext_stats_msg_send(struct dp_pdev *pdev,
 		uint8_t mac_id);
 void dp_htt_stats_print_tag(uint8_t tag_type, uint32_t *tag_buf);
 void dp_htt_stats_copy_tag(struct dp_pdev *pdev, uint8_t tag_type, uint32_t *tag_buf);
-void dp_peer_rxtid_stats(struct dp_peer *peer, void (*callback_fn),
-		void *cb_ctxt);
+int dp_peer_rxtid_stats(struct dp_peer *peer, void (*callback_fn),
+			void *cb_ctxt);
 void dp_set_pn_check_wifi3(struct cdp_vdev *vdev_handle,
 	struct cdp_peer *peer_handle, enum cdp_sec_type sec_type,
 	 uint32_t *rx_pn);
+
+void dp_set_key_sec_type_wifi3(struct cdp_vdev *vdev_handle,
+			       struct cdp_peer *peer_handle,
+			       enum cdp_sec_type sec_type,
+			       bool is_unicast);
 
 void *dp_get_pdev_for_mac_id(struct dp_soc *soc, uint32_t mac_id);
 void dp_set_michael_key(struct cdp_peer *peer_handle,
@@ -1323,5 +1347,52 @@ QDF_STATUS dp_tx_add_to_comp_queue(struct dp_soc *soc,
 	return QDF_STATUS_E_FAILURE;
 }
 #endif
+
+/*
+ * dp_rx_tid_update_wifi3() – Update receive TID state
+ * @peer: Datapath peer handle
+ * @tid: TID
+ * @ba_window_size: BlockAck window size
+ * @start_seq: Starting sequence number
+ *
+ * Return: QDF_STATUS code
+ */
+QDF_STATUS dp_rx_tid_update_wifi3(struct dp_peer *peer, int tid, uint32_t
+					 ba_window_size, uint32_t start_seq);
+
+/*
+ * dp_get_vdev_from_soc_vdev_id_wifi3() -
+ * Returns vdev object given the vdev id
+ * vdev id is unique across pdev's
+ *
+ * @soc         : core DP soc context
+ * @vdev_id     : vdev id from vdev object can be retrieved
+ *
+ * Return: struct dp_vdev*: Pointer to DP vdev object
+ */
+static inline struct dp_vdev *
+dp_get_vdev_from_soc_vdev_id_wifi3(struct dp_soc *soc,
+					uint8_t vdev_id)
+{
+	struct dp_pdev *pdev = NULL;
+	struct dp_vdev *vdev = NULL;
+	int i;
+
+	for (i = 0; i < MAX_PDEV_CNT && soc->pdev_list[i]; i++) {
+		pdev = soc->pdev_list[i];
+		qdf_spin_lock_bh(&pdev->vdev_list_lock);
+		TAILQ_FOREACH(vdev, &pdev->vdev_list, vdev_list_elem) {
+			if (vdev->vdev_id == vdev_id) {
+				qdf_spin_unlock_bh(&pdev->vdev_list_lock);
+				return vdev;
+			}
+		}
+		qdf_spin_unlock_bh(&pdev->vdev_list_lock);
+	}
+	dp_err("Failed to find vdev for vdev_id %d", vdev_id);
+
+	return NULL;
+
+}
 
 #endif /* #ifndef _DP_INTERNAL_H_ */

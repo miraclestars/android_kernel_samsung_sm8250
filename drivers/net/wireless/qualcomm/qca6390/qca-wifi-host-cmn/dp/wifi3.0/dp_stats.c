@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -4589,7 +4589,8 @@ dp_print_ring_stats(struct dp_pdev *pdev)
 	uint32_t i;
 	int mac_id;
 
-	if (hif_pm_runtime_get_sync(pdev->soc->hif_handle))
+	if (hif_pm_runtime_get_sync(pdev->soc->hif_handle,
+				    RTPM_ID_DP_PRINT_RING_STATS))
 		return;
 
 	dp_print_ring_stat_from_hal(pdev->soc,
@@ -4651,7 +4652,8 @@ dp_print_ring_stats(struct dp_pdev *pdev)
 					    &pdev->rxdma_err_dst_ring[i],
 					    RXDMA_DST);
 
-	hif_pm_runtime_put(pdev->soc->hif_handle);
+	hif_pm_runtime_put(pdev->soc->hif_handle,
+			   RTPM_ID_DP_PRINT_RING_STATS);
 }
 
 /**
@@ -4988,6 +4990,8 @@ void dp_print_per_ring_stats(struct dp_soc *soc)
 		total_packets = 0;
 		DP_PRINT_STATS("Packets on ring %u:", ring);
 		for (core = 0; core < num_possible_cpus(); core++) {
+			if (!soc->stats.rx.ring_packets[core][ring])
+				continue;
 			DP_PRINT_STATS("Packets arriving on core %u: %llu",
 				       core,
 				       soc->stats.rx.ring_packets[core][ring]);
@@ -5074,17 +5078,23 @@ void dp_txrx_path_stats(struct dp_soc *soc)
 		DP_PRINT_STATS("delivered %u msdus ( %llu bytes),",
 			       pdev->stats.rx.to_stack.num,
 			       pdev->stats.rx.to_stack.bytes);
-		for (i = 0; i <  CDP_MAX_RX_RINGS; i++)
+		for (i = 0; i <  CDP_MAX_RX_RINGS; i++) {
+			if (!pdev->stats.rx.rcvd_reo[i].num)
+				continue;
 			DP_PRINT_STATS(
 				       "received on reo[%d] %u msdus( %llu bytes),",
 				       i, pdev->stats.rx.rcvd_reo[i].num,
 				       pdev->stats.rx.rcvd_reo[i].bytes);
+		}
 		DP_PRINT_STATS("intra-bss packets %u msdus ( %llu bytes),",
 			       pdev->stats.rx.intra_bss.pkts.num,
 			       pdev->stats.rx.intra_bss.pkts.bytes);
 		DP_PRINT_STATS("intra-bss fails %u msdus ( %llu bytes),",
 			       pdev->stats.rx.intra_bss.fail.num,
 			       pdev->stats.rx.intra_bss.fail.bytes);
+		DP_PRINT_STATS("intra-bss no mdns fwds %u msdus",
+			       pdev->stats.rx.intra_bss.mdns_no_fwd);
+
 		DP_PRINT_STATS("raw packets %u msdus ( %llu bytes),",
 			       pdev->stats.rx.raw.num,
 			       pdev->stats.rx.raw.bytes);
@@ -5102,12 +5112,30 @@ void dp_txrx_path_stats(struct dp_soc *soc)
 			       pdev->soc->stats.rx.err.defrag_peer_uninit);
 		DP_PRINT_STATS("pkts delivered no peer %u",
 			       pdev->soc->stats.rx.err.pkt_delivered_no_peer);
+		DP_PRINT_STATS("2k jump delba sent: %u",
+			       pdev->soc->stats.rx.err.rx_2k_jump_delba_sent);
+		DP_PRINT_STATS("2k jump msdu to stack: %u",
+			       pdev->soc->stats.rx.err.rx_2k_jump_to_stack);
+		DP_PRINT_STATS("2k jump msdu drop: %u",
+			       pdev->soc->stats.rx.err.rx_2k_jump_drop);
+		DP_PRINT_STATS("REO err oor msdu to stack %u",
+			       pdev->soc->stats.rx.err.reo_err_oor_to_stack);
+		DP_PRINT_STATS("REO err oor msdu drop: %u",
+			       pdev->soc->stats.rx.err.reo_err_oor_drop);
+		DP_PRINT_STATS("Rx err msdu rejected: %d",
+			       soc->stats.rx.err.rejected);
+		DP_PRINT_STATS("Rx stale link desc cookie: %d",
+			       pdev->soc->stats.rx.err.invalid_link_cookie);
 
 		DP_PRINT_STATS("Reo Statistics");
+		DP_PRINT_STATS("near_full: %u ", soc->stats.rx.near_full);
 		DP_PRINT_STATS("rbm error: %u msdus",
 			       pdev->soc->stats.rx.err.invalid_rbm);
 		DP_PRINT_STATS("hal ring access fail: %u msdus",
 			       pdev->soc->stats.rx.err.hal_ring_access_fail);
+
+		DP_PRINT_STATS("hal ring access full fail: %u msdus",
+			       pdev->soc->stats.rx.err.hal_ring_access_full_fail);
 
 		for (error_code = 0; error_code < HAL_REO_ERR_MAX;
 				error_code++) {
@@ -5266,7 +5294,7 @@ dp_print_pdev_tx_stats(struct dp_pdev *pdev)
 		       pdev->stats.tx.dropped.age_out);
 	DP_PRINT_STATS("	headroom insufficient = %d",
 		       pdev->stats.tx_i.dropped.headroom_insufficient);
-	DP_PRINT_STATS("	Multicast:");
+	DP_PRINT_STATS("Multicast:");
 	DP_PRINT_STATS("	Packets: %u",
 		       pdev->stats.tx.mcast.num);
 	DP_PRINT_STATS("	Bytes: %llu",
@@ -5289,6 +5317,8 @@ dp_print_pdev_tx_stats(struct dp_pdev *pdev)
 		       pdev->stats.tx_i.tso.tso_pkt.bytes);
 	DP_PRINT_STATS("	Dropped By Host = %d",
 		       pdev->stats.tx_i.tso.dropped_host.num);
+	DP_PRINT_STATS("	Dropped By Host(no free TSO desc) = %d",
+		       pdev->stats.tx_i.tso.tso_no_mem_dropped.num);
 	DP_PRINT_STATS("Mcast Enhancement:");
 	DP_PRINT_STATS("	Packets = %d",
 		       pdev->stats.tx_i.mcast_en.mcast_pkt.num);
@@ -5442,6 +5472,8 @@ dp_print_pdev_rx_mon_stats(struct dp_pdev *pdev)
 		       rx_mon_stats->dest_ppdu_done);
 	DP_PRINT_STATS("dest_mpdu_done_cnt = %d",
 		       rx_mon_stats->dest_mpdu_done);
+	DP_PRINT_STATS("tlv_tag_status_err_cnt = %u",
+		       rx_mon_stats->tlv_tag_status_err);
 	DP_PRINT_STATS("dest_mpdu_drop_cnt = %d",
 		       rx_mon_stats->dest_mpdu_drop);
 	DP_PRINT_STATS("dup_mon_linkdesc_cnt = %d",
@@ -5476,6 +5508,8 @@ dp_print_pdev_rx_mon_stats(struct dp_pdev *pdev)
 	}
 	qdf_mem_free(stat_ring_ppdu_ids);
 	qdf_mem_free(dest_ring_ppdu_ids);
+	DP_PRINT_STATS("mon_rx_dest_stuck = %d",
+		       rx_mon_stats->mon_rx_dest_stuck);
 }
 
 void
@@ -5506,6 +5540,10 @@ dp_print_soc_tx_stats(struct dp_soc *soc)
 		       soc->stats.tx.tcl_ring_full[2]);
 	DP_PRINT_STATS("Tx invalid completion release = %d",
 		       soc->stats.tx.invalid_release_source);
+	DP_PRINT_STATS("Tx comp wbm internal error = %d",
+		       soc->stats.tx.wbm_internal_error);
+	DP_PRINT_STATS("Tx comp non wbm internal error = %d",
+		       soc->stats.tx.non_wbm_internal_err);
 	DP_PRINT_STATS("Tx comp loop pkt limit hit = %d",
 		       soc->stats.tx.tx_comp_loop_pkt_limit_hit);
 	DP_PRINT_STATS("Tx comp HP out of sync2 = %d",
@@ -5520,7 +5558,7 @@ void dp_print_soc_interrupt_stats(struct dp_soc *soc)
 	DP_PRINT_STATS("INT:     Total  |txComps|reo[0] |reo[1] |reo[2] |reo[3] |mon    |rx_err | wbm   |reo_sta|rxdm2hst|hst2rxdm|");
 	for (i = 0; i < WLAN_CFG_INT_NUM_CONTEXTS; i++) {
 		intr_stats = &soc->intr_ctx[i].intr_stats;
-		DP_PRINT_STATS("%3u[%d]: %7u %7u %7u %7u %7u %7u %7u %7u %7u %7u %8u %8u",
+		DP_PRINT_STATS("%3u[%3d]: %7u %7u %7u %7u %7u %7u %7u %7u %7u %7u %8u %8u",
 			       i,
 			       hif_get_int_ctx_irq_num(soc->hif_handle, i),
 			       intr_stats->num_masks,
@@ -5572,6 +5610,8 @@ dp_print_soc_rx_stats(struct dp_soc *soc)
 		       soc->stats.rx.err.rx_invalid_peer.num);
 	DP_PRINT_STATS("HAL Ring Access Fail = %d",
 		       soc->stats.rx.err.hal_ring_access_fail);
+	DP_PRINT_STATS("HAL Ring Access Full Fail = %d",
+		       soc->stats.rx.err.hal_ring_access_full_fail);
 	DP_PRINT_STATS("MSDU Done failures = %d",
 		       soc->stats.rx.err.msdu_done_fail);
 	DP_PRINT_STATS("RX frags: %d", soc->stats.rx.rx_frags);
@@ -5579,6 +5619,8 @@ dp_print_soc_rx_stats(struct dp_soc *soc)
 	DP_PRINT_STATS("RX frag err: %d", soc->stats.rx.rx_frag_err);
 
 	DP_PRINT_STATS("RX HP out_of_sync: %d", soc->stats.rx.hp_oos2);
+	DP_PRINT_STATS("RX Ring Near Full: %d", soc->stats.rx.near_full);
+
 	DP_PRINT_STATS("RX Reap Loop Pkt Limit Hit: %d",
 		       soc->stats.rx.reap_loop_pkt_limit_hit);
 	DP_PRINT_STATS("RX DESC invalid magic: %u",
@@ -5590,6 +5632,33 @@ dp_print_soc_rx_stats(struct dp_soc *soc)
 
 	DP_PRINT_STATS("RXDMA ERR DUP DESC: %d",
 		       soc->stats.rx.err.hal_rxdma_err_dup);
+
+	DP_PRINT_STATS("RX scatter msdu: %d",
+		       soc->stats.rx.err.scatter_msdu);
+
+	DP_PRINT_STATS("RX wait completed msdu break: %d",
+		       soc->stats.rx.msdu_scatter_wait_break);
+
+	DP_PRINT_STATS("2k jump delba sent: %d",
+		       soc->stats.rx.err.rx_2k_jump_delba_sent);
+
+	DP_PRINT_STATS("2k jump msdu to stack: %d",
+		       soc->stats.rx.err.rx_2k_jump_to_stack);
+
+	DP_PRINT_STATS("2k jump msdu drop: %d",
+		       soc->stats.rx.err.rx_2k_jump_drop);
+
+	DP_PRINT_STATS("REO err oor msdu to stack %d",
+		       soc->stats.rx.err.reo_err_oor_to_stack);
+
+	DP_PRINT_STATS("REO err oor msdu drop: %d",
+		       soc->stats.rx.err.reo_err_oor_drop);
+
+	DP_PRINT_STATS("Rx err msdu rejected: %d",
+		       soc->stats.rx.err.rejected);
+
+	DP_PRINT_STATS("Rx stale link desc cookie: %d",
+		       soc->stats.rx.err.invalid_link_cookie);
 
 	for (i = 0; i < HAL_RXDMA_ERR_MAX; i++) {
 		index += qdf_snprint(&rxdma_error[index],
@@ -5605,5 +5674,7 @@ dp_print_soc_rx_stats(struct dp_soc *soc)
 				" %d", soc->stats.rx.err.reo_error[i]);
 	}
 	DP_PRINT_STATS("REO Error(0-14):%s", reo_error);
+	DP_PRINT_STATS("REO CMD SEND FAIL: %d",
+		       soc->stats.rx.err.reo_cmd_send_fail);
 }
 

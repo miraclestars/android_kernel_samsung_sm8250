@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -31,17 +31,23 @@
 #include <wlan_cp_stats_utils_api.h>
 #include "../../core/src/wlan_cp_stats_defs.h"
 
-static bool tgt_mc_cp_stats_is_last_event(struct stats_event *ev)
+static bool tgt_mc_cp_stats_is_last_event(struct stats_event *ev,
+					  enum stats_req_type stats_type)
 {
 	bool is_last_event;
 
 	if (IS_MSB_SET(ev->last_event)) {
 		is_last_event = IS_LSB_SET(ev->last_event);
-		cp_stats_debug("is_last_event %d", is_last_event);
 	} else {
-		cp_stats_debug("FW does not support last event bit");
-		is_last_event = !!ev->peer_stats;
+		if (stats_type == TYPE_CONNECTION_TX_POWER)
+			is_last_event = true;
+		else
+			is_last_event = !!ev->peer_stats;
 	}
+
+	if (is_last_event)
+		cp_stats_debug("Last stats event");
+
 	return is_last_event;
 }
 
@@ -64,10 +70,8 @@ static void tgt_mc_cp_stats_extract_tx_power(struct wlan_objmgr_psoc *psoc,
 	struct pdev_mc_cp_stats *pdev_mc_stats;
 	struct pdev_cp_stats *pdev_cp_stats_priv;
 
-	if (!ev->pdev_stats) {
-		cp_stats_debug("no pdev stats");
+	if (!ev->pdev_stats)
 		return;
-	}
 
 	if (is_station_stats)
 		status = ucfg_mc_cp_stats_get_pending_req(psoc,
@@ -110,14 +114,15 @@ static void tgt_mc_cp_stats_extract_tx_power(struct wlan_objmgr_psoc *psoc,
 	pdev_mc_stats = pdev_cp_stats_priv->pdev_stats;
 	max_pwr = pdev_mc_stats->max_pwr = ev->pdev_stats[pdev_id].max_pwr;
 	wlan_cp_stats_pdev_obj_unlock(pdev_cp_stats_priv);
-
 	if (is_station_stats)
 		goto end;
 
-	ucfg_mc_cp_stats_reset_pending_req(psoc, TYPE_CONNECTION_TX_POWER);
-	if (last_req.u.get_tx_power_cb)
-		last_req.u.get_tx_power_cb(max_pwr, last_req.cookie);
-
+	if (tgt_mc_cp_stats_is_last_event(ev, TYPE_CONNECTION_TX_POWER)) {
+		ucfg_mc_cp_stats_reset_pending_req(psoc,
+						   TYPE_CONNECTION_TX_POWER);
+		if (last_req.u.get_tx_power_cb)
+			last_req.u.get_tx_power_cb(max_pwr, last_req.cookie);
+	}
 end:
 	if (vdev)
 		wlan_objmgr_vdev_release_ref(vdev, WLAN_CP_STATS_ID);
@@ -336,9 +341,9 @@ tgt_mc_cp_stats_update_peer_stats(struct wlan_objmgr_psoc *psoc,
 		peer_mc_stats->rx_rate = peer_stats->rx_rate;
 	if (peer_stats->peer_rssi)
 		peer_mc_stats->peer_rssi = peer_stats->peer_rssi;
-	cp_stats_debug("peer_mac=%pM, tx_rate=%u, rx_rate=%u, peer_rssi=%d",
-		       peer_mc_stats->peer_macaddr, peer_mc_stats->tx_rate,
-		       peer_mc_stats->rx_rate, peer_mc_stats->peer_rssi);
+	cp_stats_nofl_debug("PEER STATS: peer_mac=%pM, tx_rate=%u, rx_rate=%u, peer_rssi=%d",
+			    peer_mc_stats->peer_macaddr, peer_mc_stats->tx_rate,
+			    peer_mc_stats->rx_rate, peer_mc_stats->peer_rssi);
 	wlan_cp_stats_peer_obj_unlock(peer_cp_stats_priv);
 
 end:
@@ -472,10 +477,8 @@ static void tgt_mc_cp_stats_extract_peer_stats(struct wlan_objmgr_psoc *psoc,
 		return;
 	}
 
-	if (!ev->peer_stats) {
-		cp_stats_debug("no peer stats");
+	if (!ev->peer_stats)
 		goto extd2_stats;
-	}
 
 	selected = ev->num_peer_stats;
 	for (i = 0; i < ev->num_peer_stats; i++) {
@@ -501,10 +504,9 @@ static void tgt_mc_cp_stats_extract_peer_stats(struct wlan_objmgr_psoc *psoc,
 
 extd2_stats:
 
-	if (!ev->peer_adv_stats) {
-		cp_stats_debug("no peer_extd2 stats");
+	if (!ev->peer_adv_stats)
 		goto complete;
-	}
+
 	selected = ev->num_peer_adv_stats;
 	for (i = 0; i < ev->num_peer_adv_stats; i++) {
 		status = tgt_mc_cp_stats_update_peer_adv_stats(
@@ -534,9 +536,9 @@ complete:
 		return;
 
 	tgt_mc_cp_stats_extract_peer_extd_stats(psoc, ev);
-	if (tgt_mc_cp_stats_is_last_event(ev)) {
-		tgt_mc_cp_stats_prepare_raw_peer_rssi(psoc, &last_req);
+	if (tgt_mc_cp_stats_is_last_event(ev, TYPE_PEER_STATS)) {
 		ucfg_mc_cp_stats_reset_pending_req(psoc, TYPE_PEER_STATS);
+		tgt_mc_cp_stats_prepare_raw_peer_rssi(psoc, &last_req);
 	}
 }
 
@@ -587,10 +589,8 @@ static void tgt_mc_cp_stats_extract_vdev_summary_stats(
 	struct peer_cp_stats *peer_cp_stats_priv;
 	struct vdev_cp_stats *vdev_cp_stats_priv;
 
-	if (!ev->vdev_summary_stats) {
-		cp_stats_debug("no summary stats");
+	if (!ev->vdev_summary_stats)
 		return;
-	}
 
 	status = ucfg_mc_cp_stats_get_pending_req(psoc,
 						 TYPE_STATION_STATS,
@@ -665,10 +665,8 @@ static void tgt_mc_cp_stats_extract_vdev_chain_rssi_stats(
 	struct vdev_mc_cp_stats *vdev_mc_stats;
 	struct vdev_cp_stats *vdev_cp_stats_priv;
 
-	if (!ev->vdev_chain_rssi) {
-		cp_stats_debug("no vdev chain rssi stats");
+	if (!ev->vdev_chain_rssi)
 		return;
-	}
 
 	status = ucfg_mc_cp_stats_get_pending_req(psoc,
 						  TYPE_STATION_STATS,
@@ -839,11 +837,21 @@ static void tgt_mc_cp_stats_extract_station_stats(
 	 * PEER stats are the last stats sent for get_station statistics.
 	 * reset type_map bit for station stats .
 	 */
-	if (tgt_mc_cp_stats_is_last_event(ev)) {
+	if (tgt_mc_cp_stats_is_last_event(ev, TYPE_STATION_STATS)) {
+		ucfg_mc_cp_stats_reset_pending_req(psoc, TYPE_STATION_STATS);
 		tgt_mc_cp_stats_prepare_n_send_raw_station_stats(psoc,
 								 &last_req);
-		ucfg_mc_cp_stats_reset_pending_req(psoc, TYPE_STATION_STATS);
 	}
+}
+
+static void tgt_mc_cp_send_lost_link_stats(struct wlan_objmgr_psoc *psoc,
+					   struct stats_event *ev)
+{
+	struct psoc_cp_stats *psoc_cp_stats_priv;
+
+	psoc_cp_stats_priv = wlan_cp_stats_get_psoc_stats_obj(psoc);
+	if (psoc_cp_stats_priv && psoc_cp_stats_priv->legacy_stats_cb)
+		psoc_cp_stats_priv->legacy_stats_cb(ev);
 }
 
 QDF_STATUS tgt_mc_cp_stats_process_stats_event(struct wlan_objmgr_psoc *psoc,
@@ -860,6 +868,7 @@ QDF_STATUS tgt_mc_cp_stats_process_stats_event(struct wlan_objmgr_psoc *psoc,
 
 	tgt_mc_cp_stats_extract_cca_stats(psoc, ev);
 
+	tgt_mc_cp_send_lost_link_stats(psoc, ev);
 	return QDF_STATUS_SUCCESS;
 }
 

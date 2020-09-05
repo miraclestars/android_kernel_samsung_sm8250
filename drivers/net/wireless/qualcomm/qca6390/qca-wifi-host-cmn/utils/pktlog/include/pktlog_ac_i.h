@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,6 +33,9 @@
 #define PKTLOG_DEFAULT_PHYERR_THRESH    300
 #define PKTLOG_DEFAULT_TRIGGER_INTERVAL 500
 
+/* Max Pktlog buffer size received from fw/hw */
+#define MAX_PKTLOG_RECV_BUF_SIZE        2048
+
 struct ath_pktlog_arg {
 	struct ath_pktlog_info *pl_info;
 	uint32_t flags;
@@ -45,7 +48,9 @@ struct ath_pktlog_arg {
 #endif
 	size_t log_size;
 	uint16_t timestamp;
+#ifdef PKTLOG_HAS_SPECIFIC_DATA
 	uint32_t type_specific_data;
+#endif
 	char *buf;
 };
 

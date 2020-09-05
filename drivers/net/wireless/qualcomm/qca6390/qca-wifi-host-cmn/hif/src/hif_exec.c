@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -18,7 +18,6 @@
 
 #include <hif_exec.h>
 #include <ce_main.h>
-#include <hif_irq_affinity.h>
 #include "qdf_module.h"
 #include "qdf_net_if.h"
 /* mapping NAPI budget 0 to internal budget 0
@@ -35,8 +34,9 @@ static struct hif_exec_context *hif_exec_tasklet_create(void);
 #ifdef WLAN_FEATURE_DP_EVENT_HISTORY
 struct hif_event_history hif_event_desc_history[HIF_NUM_INT_CONTEXTS];
 
-static inline int hif_get_next_record_index(qdf_atomic_t *table_index,
-					    int array_size)
+static inline
+int hif_get_next_record_index(qdf_atomic_t *table_index,
+			      int array_size)
 {
 	int record_index = qdf_atomic_inc_return(table_index);
 
@@ -576,6 +576,7 @@ static void hif_exec_napi_kill(struct hif_exec_context *ctx)
 	for (irq_ind = 0; irq_ind < ctx->numirq; irq_ind++)
 		hif_irq_affinity_remove(ctx->os_irq[irq_ind]);
 
+	hif_core_ctl_set_boost(false);
 	netif_napi_del(&(n_ctx->napi));
 }
 
@@ -690,6 +691,18 @@ int32_t hif_get_int_ctx_irq_num(struct hif_opaque_softc *softc,
 }
 
 qdf_export_symbol(hif_get_int_ctx_irq_num);
+
+#ifdef HIF_CPU_PERF_AFFINE_MASK
+void hif_config_irq_set_perf_affinity_hint(
+	struct hif_opaque_softc *hif_ctx)
+{
+	struct hif_softc *scn = HIF_GET_SOFTC(hif_ctx);
+
+	hif_config_irq_affinity(scn);
+}
+
+qdf_export_symbol(hif_config_irq_set_perf_affinity_hint);
+#endif
 
 uint32_t hif_configure_ext_group_interrupts(struct hif_opaque_softc *hif_ctx)
 {

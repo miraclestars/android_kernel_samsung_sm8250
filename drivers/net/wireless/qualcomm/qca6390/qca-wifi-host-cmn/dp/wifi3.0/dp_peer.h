@@ -89,6 +89,31 @@ dp_peer_find_by_id(struct dp_soc *soc,
 }
 #endif /* PEER_LOCK_REF_PROTECT */
 
+#ifdef PEER_CACHE_RX_PKTS
+/**
+ * dp_rx_flush_rx_cached() - flush cached rx frames
+ * @peer: peer
+ * @drop: set flag to drop frames
+ *
+ * Return: None
+ */
+void dp_rx_flush_rx_cached(struct dp_peer *peer, bool drop);
+#else
+static inline void dp_rx_flush_rx_cached(struct dp_peer *peer, bool drop)
+{
+}
+#endif
+
+static inline void
+dp_clear_peer_internal(struct dp_soc *soc, struct dp_peer *peer)
+{
+	qdf_spin_lock_bh(&peer->peer_info_lock);
+	peer->state = OL_TXRX_PEER_STATE_DISC;
+	qdf_spin_unlock_bh(&peer->peer_info_lock);
+
+	dp_rx_flush_rx_cached(peer, true);
+}
+
 void dp_print_ast_stats(struct dp_soc *soc);
 void dp_rx_peer_map_handler(void *soc_handle, uint16_t peer_id,
 			    uint16_t hw_peer_id, uint8_t vdev_id,
@@ -100,6 +125,10 @@ void dp_rx_peer_unmap_handler(void *soc_handle, uint16_t peer_id,
 void dp_rx_sec_ind_handler(void *soc_handle, uint16_t peer_id,
 	enum cdp_sec_type sec_type, int is_unicast,
 	u_int32_t *michael_key, u_int32_t *rx_pn);
+
+QDF_STATUS dp_rx_delba_ind_handler(void *soc_handle, uint16_t peer_id,
+				   uint8_t tid, uint16_t win_sz);
+
 uint8_t dp_get_peer_mac_addr_frm_id(struct cdp_soc_t *soc_handle,
 		uint16_t peer_id, uint8_t *peer_mac);
 
@@ -149,41 +178,6 @@ void dp_peer_ast_hash_remove(struct dp_soc *soc,
 			     struct dp_ast_entry *ase);
 
 /*
- * dp_get_vdev_from_soc_vdev_id_wifi3() -
- * Returns vdev object given the vdev id
- * vdev id is unique across pdev's
- *
- * @soc         : core DP soc context
- * @vdev_id     : vdev id from vdev object can be retrieved
- *
- * Return: struct dp_vdev*: Pointer to DP vdev object
- */
-static inline struct dp_vdev *
-dp_get_vdev_from_soc_vdev_id_wifi3(struct dp_soc *soc,
-					uint8_t vdev_id)
-{
-	struct dp_pdev *pdev = NULL;
-	struct dp_vdev *vdev = NULL;
-	int i;
-
-	for (i = 0; i < MAX_PDEV_CNT && soc->pdev_list[i]; i++) {
-		pdev = soc->pdev_list[i];
-		qdf_spin_lock_bh(&pdev->vdev_list_lock);
-		TAILQ_FOREACH(vdev, &pdev->vdev_list, vdev_list_elem) {
-			if (vdev->vdev_id == vdev_id) {
-				qdf_spin_unlock_bh(&pdev->vdev_list_lock);
-				return vdev;
-			}
-		}
-		qdf_spin_unlock_bh(&pdev->vdev_list_lock);
-	}
-	dp_err("Failed to find vdev for vdev_id %d", vdev_id);
-
-	return NULL;
-
-}
-
-/*
  * dp_peer_find_by_id_exist - check if peer exists for given id
  * @soc: core DP soc context
  * @peer_id: peer id from peer object can be retrieved
@@ -210,4 +204,15 @@ void
 dp_peer_update_inactive_time(struct dp_pdev *pdev, uint32_t tag_type,
 			     uint32_t *tag_buf);
 
+/*
+ * dp_rx_tid_delete_cb() - Callback to flush reo descriptor HW cache
+ * after deleting the entries (ie., setting valid=0)
+ *
+ * @soc: DP SOC handle
+ * @cb_ctxt: Callback context
+ * @reo_status: REO command status
+ */
+void dp_rx_tid_delete_cb(struct dp_soc *soc,
+			 void *cb_ctxt,
+			 union hal_reo_status *reo_status);
 #endif /* _DP_PEER_H_ */

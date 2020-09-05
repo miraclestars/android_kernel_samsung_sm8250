@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  *
  * Permission to use, copy, modify, and/or distribute this software for
@@ -395,6 +395,11 @@ struct cdp_cmn_ops {
 	void  (*set_pn_check)(struct cdp_vdev *vdev,
 		struct cdp_peer *peer_handle, enum cdp_sec_type sec_type,
 		 uint32_t *rx_pn);
+	void  (*set_key_sec_type)(struct cdp_vdev *vdev,
+				  struct cdp_peer *peer_handle,
+				  enum cdp_sec_type sec_type,
+				  bool is_unicast);
+
 	QDF_STATUS (*update_config_parameters)(struct cdp_soc *psoc,
 			struct cdp_config_params *params);
 
@@ -971,6 +976,7 @@ struct ol_if_ops {
 						uint32_t flags);
 
 	bool (*is_roam_inprogress)(uint32_t vdev_id);
+	enum QDF_GLOBAL_MODE (*get_con_mode)(void);
 	/* TODO: Add any other control path calls required to OL_IF/WMA layer */
 };
 
@@ -1010,9 +1016,14 @@ struct cdp_misc_ops {
 	uint16_t (*get_vdev_id)(struct cdp_vdev *vdev);
 	uint32_t (*get_tx_ack_stats)(struct cdp_pdev *pdev, uint8_t vdev_id);
 	QDF_STATUS (*set_wisa_mode)(struct cdp_vdev *vdev, bool enable);
-	QDF_STATUS (*txrx_data_stall_cb_register)(data_stall_detect_cb cb);
-	QDF_STATUS (*txrx_data_stall_cb_deregister)(data_stall_detect_cb cb);
+	QDF_STATUS (*txrx_data_stall_cb_register)(
+			struct cdp_pdev *pdev,
+			data_stall_detect_cb cb);
+	QDF_STATUS (*txrx_data_stall_cb_deregister)(
+			struct cdp_pdev *pdev,
+			data_stall_detect_cb cb);
 	void (*txrx_post_data_stall_event)(
+			struct cdp_pdev *pdev,
 			enum data_stall_log_event_indicator indicator,
 			enum data_stall_log_event_type data_stall_type,
 			uint32_t pdev_id, uint32_t vdev_id_bitmap,
@@ -1037,6 +1048,10 @@ struct cdp_misc_ops {
 					       uint32_t time_in_ms,
 					       uint32_t high_th,
 					       uint32_t low_th);
+	QDF_STATUS (*txrx_ext_stats_request)(struct cdp_pdev *pdev,
+					     struct cdp_txrx_ext_stats *req);
+	QDF_STATUS (*request_rx_hw_stats)(struct cdp_soc_t *soc_hdl,
+					  uint8_t vdev_id);
 };
 
 /**
@@ -1234,10 +1249,16 @@ struct cdp_ipa_ops {
  * struct cdp_bus_ops - mcl bus suspend/resume ops
  * @bus_suspend:
  * @bus_resume:
+ * @process_wow_ack_rsp: handler for wow ack response
+ * @process_target_suspend_req: handler for target suspend request
  */
 struct cdp_bus_ops {
 	QDF_STATUS (*bus_suspend)(struct cdp_pdev *opaque_pdev);
 	QDF_STATUS (*bus_resume)(struct cdp_pdev *opaque_pdev);
+	void (*process_wow_ack_rsp)(struct cdp_soc_t *soc_hdl,
+				    struct cdp_pdev *opaque_pdev);
+	void (*process_target_suspend_req)(struct cdp_soc_t *soc_hdl,
+					   struct cdp_pdev *opaque_pdev);
 };
 
 /**

@@ -36,6 +36,7 @@
 #include <linux/debugfs.h>
 
 #ifdef WMI_EXT_DBG
+#include "qdf_atomic.h"
 
 /**
  * wmi_ext_dbg_msg_enqueue() - enqueue wmi message
@@ -1617,7 +1618,7 @@ static uint8_t *wmi_id_to_name(uint32_t wmi_command)
 
 static inline void wmi_log_cmd_id(uint32_t cmd_id, uint32_t tag)
 {
-	WMI_LOGD("Send WMI command:%s command_id:%d htc_tag:%d\n",
+	WMI_LOGD("Send WMI command:%s command_id:%d htc_tag:%d",
 		 wmi_id_to_name(cmd_id), cmd_id, tag);
 }
 
@@ -1993,7 +1994,7 @@ qdf_export_symbol(wmi_unified_unregister_event_handler);
 /**
  * wmi_process_fw_event_default_ctx() - process in default caller context
  * @wmi_handle: handle to wmi
- * @htc_packet: pointer to htc packet
+ * @evt_buf: event buffer
  * @exec_ctx: execution context for wmi fw event
  *
  * Event process by below function will be in default caller context.
@@ -2002,10 +2003,9 @@ qdf_export_symbol(wmi_unified_unregister_event_handler);
  * Return: none
  */
 static void wmi_process_fw_event_default_ctx(struct wmi_unified *wmi_handle,
-		       HTC_PACKET *htc_packet, uint8_t exec_ctx)
+					     wmi_buf_t evt_buf,
+					     uint8_t exec_ctx)
 {
-	wmi_buf_t evt_buf;
-	evt_buf = (wmi_buf_t) htc_packet->pPktContext;
 
 	wmi_handle->rx_ops.wma_process_fw_event_handler_cbk
 		(wmi_handle->scn_handle, evt_buf, exec_ctx);
@@ -2078,31 +2078,19 @@ static void wmi_mtrace_rx(uint32_t message_id, uint16_t vdev_id, uint32_t data)
 }
 
 /**
- * wmi_control_rx() - process fw events callbacks
- * @ctx: handle to wmi
- * @htc_packet: pointer to htc packet
+ * wmi_process_control_rx() - process fw events callbacks
+ * @wmi_handle: handle to wmi_unified
+ * @evt_buf: handle to wmi_buf_t
  *
  * Return: none
  */
-static void wmi_control_rx(void *ctx, HTC_PACKET *htc_packet)
+static void wmi_process_control_rx(struct wmi_unified *wmi_handle,
+				   wmi_buf_t evt_buf)
 {
-	struct wmi_soc *soc = (struct wmi_soc *) ctx;
-	struct wmi_unified *wmi_handle;
-	wmi_buf_t evt_buf;
+	struct wmi_soc *soc = wmi_handle->soc;
 	uint32_t id;
-	uint32_t idx = 0;
+	uint32_t idx;
 	enum wmi_rx_exec_ctx exec_ctx;
-
-	evt_buf = (wmi_buf_t) htc_packet->pPktContext;
-
-	wmi_handle = wmi_get_pdev_ep(soc, htc_packet->Endpoint);
-	if (!wmi_handle) {
-		WMI_LOGE
-		("unable to get wmi_handle to Endpoint %d\n",
-		 htc_packet->Endpoint);
-		qdf_nbuf_free(evt_buf);
-		return;
-	}
 
 	id = WMI_GET_FIELD(qdf_nbuf_data(evt_buf), WMI_CMD_HDR, COMMANDID);
 	idx = wmi_unified_get_event_handler_ix(wmi_handle, id);
@@ -2143,14 +2131,107 @@ static void wmi_control_rx(void *ctx, HTC_PACKET *htc_packet)
 		wmi_process_fw_event_worker_thread_ctx
 					(wmi_handle, evt_buf);
 	} else if (exec_ctx > WMI_RX_WORK_CTX) {
-		wmi_process_fw_event_default_ctx
-					(wmi_handle, htc_packet, exec_ctx);
+		wmi_process_fw_event_default_ctx(wmi_handle, evt_buf, exec_ctx);
 	} else {
 		WMI_LOGE("Invalid event context %d", exec_ctx);
 		qdf_nbuf_free(evt_buf);
 	}
 
 }
+
+/**
+ * wmi_control_rx() - process fw events callbacks
+ * @ctx: handle to wmi
+ * @htc_packet: pointer to htc packet
+ *
+ * Return: none
+ */
+static void wmi_control_rx(void *ctx, HTC_PACKET *htc_packet)
+{
+	struct wmi_soc *soc = (struct wmi_soc *)ctx;
+	struct wmi_unified *wmi_handle;
+	wmi_buf_t evt_buf;
+
+	evt_buf = (wmi_buf_t)htc_packet->pPktContext;
+
+	wmi_handle = wmi_get_pdev_ep(soc, htc_packet->Endpoint);
+	if (!wmi_handle) {
+		WMI_LOGE
+		("unable to get wmi_handle to Endpoint %d\n",
+		 htc_packet->Endpoint);
+		qdf_nbuf_free(evt_buf);
+		return;
+	}
+
+	wmi_process_control_rx(wmi_handle, evt_buf);
+}
+
+#ifdef WLAN_FEATURE_WMI_SEND_RECV_QMI
+QDF_STATUS wmi_unified_cmd_send_over_qmi(struct wmi_unified *wmi_handle,
+					 wmi_buf_t buf, uint32_t buflen,
+					 uint32_t cmd_id)
+{
+	QDF_STATUS status;
+	int32_t ret;
+
+	if (!qdf_nbuf_push_head(buf, sizeof(WMI_CMD_HDR))) {
+		wmi_err("Failed to send cmd %x, no memory", cmd_id);
+		return QDF_STATUS_E_NOMEM;
+	}
+
+	qdf_mem_zero(qdf_nbuf_data(buf), sizeof(WMI_CMD_HDR));
+	WMI_SET_FIELD(qdf_nbuf_data(buf), WMI_CMD_HDR, COMMANDID, cmd_id);
+	wmi_debug("Sending WMI_CMD_ID: %d over qmi", cmd_id);
+	status = qdf_wmi_send_recv_qmi(qdf_nbuf_data(buf),
+				       buflen + sizeof(WMI_CMD_HDR),
+				       wmi_handle,
+				       wmi_process_qmi_fw_event);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		qdf_nbuf_pull_head(buf, sizeof(WMI_CMD_HDR));
+		wmi_warn("WMI send on QMI failed. Retrying WMI on HTC");
+	} else {
+		ret = qdf_atomic_inc_return(&wmi_handle->num_stats_over_qmi);
+		wmi_debug("num stats over qmi: %d", ret);
+		wmi_buf_free(buf);
+	}
+
+	return status;
+}
+
+static int __wmi_process_qmi_fw_event(void *wmi_cb_ctx, void *buf, int len)
+{
+	struct wmi_unified *wmi_handle = wmi_cb_ctx;
+	wmi_buf_t evt_buf;
+	uint32_t evt_id;
+
+	if (!wmi_handle || !buf)
+		return -EINVAL;
+
+	evt_buf = wmi_buf_alloc(wmi_handle, len);
+	if (!evt_buf)
+		return -ENOMEM;
+
+	qdf_mem_copy(qdf_nbuf_data(evt_buf), buf, len);
+	evt_id = WMI_GET_FIELD(qdf_nbuf_data(evt_buf), WMI_CMD_HDR, COMMANDID);
+	wmi_debug("Received WMI_EVT_ID: %d over qmi", evt_id);
+	wmi_process_control_rx(wmi_handle, evt_buf);
+
+	return 0;
+}
+
+int wmi_process_qmi_fw_event(void *wmi_cb_ctx, void *buf, int len)
+{
+	struct qdf_op_sync *op_sync;
+	int ret;
+
+	if (qdf_op_protect(&op_sync))
+		return -EINVAL;
+	ret = __wmi_process_qmi_fw_event(wmi_cb_ctx, buf, len);
+	qdf_op_unprotect(op_sync);
+
+	return ret;
+}
+#endif
 
 /**
  * wmi_process_fw_event() - process any fw event
@@ -2542,6 +2623,7 @@ void *wmi_unified_attach(void *scn_handle,
 	soc->scn_handle = scn_handle;
 	qdf_atomic_init(&wmi_handle->pending_cmds);
 	qdf_atomic_init(&wmi_handle->is_target_suspended);
+	qdf_atomic_init(&wmi_handle->num_stats_over_qmi);
 	wmi_runtime_pm_init(wmi_handle);
 	qdf_spinlock_create(&wmi_handle->eventq_lock);
 	qdf_nbuf_queue_init(&wmi_handle->event_queue);
@@ -2755,7 +2837,7 @@ static void wmi_htc_log_pkt(void *ctx, HTC_PACKET *htc_pkt)
 	cmd_id = WMI_GET_FIELD(qdf_nbuf_data(wmi_cmd_buf), WMI_CMD_HDR,
 			       COMMANDID);
 
-	WMI_LOGI("WMI command from HTC packet: %s, ID: %d\n",
+	WMI_LOGD("WMI command from HTC packet: %s, ID: %d\n",
 		 wmi_id_to_name(cmd_id), cmd_id);
 }
 #else

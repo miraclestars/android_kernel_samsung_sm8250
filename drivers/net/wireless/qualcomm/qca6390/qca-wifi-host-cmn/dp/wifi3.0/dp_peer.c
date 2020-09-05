@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1470,6 +1470,9 @@ dp_rx_peer_map_handler(void *soc_handle, uint16_t peer_id,
 				dp_info("STA vdev bss_peer!!!!");
 				peer->bss_peer = 1;
 				peer->vdev->vap_bss_peer = peer;
+				qdf_mem_copy(peer->vdev->vap_bss_peer_mac_addr,
+					     peer->mac_addr.raw,
+					     QDF_MAC_ADDR_SIZE);
 			}
 
 			if (peer->vdev->opmode == wlan_op_mode_sta)
@@ -1655,16 +1658,7 @@ static bool dp_get_peer_vdev_roaming_in_progress(struct dp_peer *peer)
 	return is_roaming;
 }
 
-/*
- * dp_rx_tid_update_wifi3() – Update receive TID state
- * @peer: Datapath peer handle
- * @tid: TID
- * @ba_window_size: BlockAck window size
- * @start_seq: Starting sequence number
- *
- * Return: QDF_STATUS code
- */
-static QDF_STATUS dp_rx_tid_update_wifi3(struct dp_peer *peer, int tid, uint32_t
+QDF_STATUS dp_rx_tid_update_wifi3(struct dp_peer *peer, int tid, uint32_t
 					 ba_window_size, uint32_t start_seq)
 {
 	struct dp_rx_tid *rx_tid = &peer->rx_tid[tid];
@@ -1685,8 +1679,11 @@ static QDF_STATUS dp_rx_tid_update_wifi3(struct dp_peer *peer, int tid, uint32_t
 	}
 
 	dp_set_ssn_valid_flag(&params, 0);
-	dp_reo_send_cmd(soc, CMD_UPDATE_RX_REO_QUEUE, &params,
-			dp_rx_tid_update_cb, rx_tid);
+	if (dp_reo_send_cmd(soc, CMD_UPDATE_RX_REO_QUEUE, &params,
+			    dp_rx_tid_update_cb, rx_tid)) {
+		dp_err_log("failed to send reo cmd CMD_UPDATE_RX_REO_QUEUE");
+		DP_STATS_INC(soc, rx.err.reo_cmd_send_fail, 1);
+	}
 
 	rx_tid->ba_win_size = ba_window_size;
 
@@ -1716,6 +1713,7 @@ static void dp_reo_desc_free(struct dp_soc *soc, void *cb_ctxt,
 	struct reo_desc_list_node *freedesc =
 		(struct reo_desc_list_node *)cb_ctxt;
 	struct dp_rx_tid *rx_tid = &freedesc->rx_tid;
+	unsigned long curr_ts = qdf_get_system_timestamp();
 
 	if ((reo_status->fl_cache_status.header.status !=
 		HAL_REO_CMD_SUCCESS) &&
@@ -1728,7 +1726,8 @@ static void dp_reo_desc_free(struct dp_soc *soc, void *cb_ctxt,
 			  freedesc->rx_tid.tid);
 	}
 	QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO_HIGH,
-		  "%s: hw_qdesc_paddr: %pK, tid:%d", __func__,
+		  "%s:%lu hw_qdesc_paddr: %pK, tid:%d", __func__,
+		  curr_ts,
 		  (void *)(rx_tid->hw_qdesc_paddr), rx_tid->tid);
 	qdf_mem_unmap_nbytes_single(soc->osdev,
 		rx_tid->hw_qdesc_paddr,
@@ -1936,6 +1935,89 @@ error:
 	return err;
 }
 
+#ifdef REO_DESC_DEFER_FREE
+/*
+ * dp_reo_desc_clean_up() - If cmd to flush base desc fails add
+ * desc back to freelist and defer the deletion
+ *
+ * @soc: DP SOC handle
+ * @desc: Base descriptor to be freed
+ * @reo_status: REO command status
+ */
+static void dp_reo_desc_clean_up(struct dp_soc *soc,
+				 struct reo_desc_list_node *desc,
+				 union hal_reo_status *reo_status)
+{
+	desc->free_ts = qdf_get_system_timestamp();
+	DP_STATS_INC(soc, rx.err.reo_cmd_send_fail, 1);
+	qdf_list_insert_back(&soc->reo_desc_freelist,
+			     (qdf_list_node_t *)desc);
+}
+
+#else
+/*
+ * dp_reo_desc_clean_up() - If send cmd to REO inorder to flush
+ * cache fails free the base REO desc anyway
+ *
+ * @soc: DP SOC handle
+ * @desc: Base descriptor to be freed
+ * @reo_status: REO command status
+ */
+static void dp_reo_desc_clean_up(struct dp_soc *soc,
+				 struct reo_desc_list_node *desc,
+				 union hal_reo_status *reo_status)
+{
+	if (reo_status) {
+		qdf_mem_zero(reo_status, sizeof(*reo_status));
+		reo_status->fl_cache_status.header.status = 0;
+		dp_reo_desc_free(soc, (void *)desc, reo_status);
+	}
+}
+#endif
+
+/*
+ * dp_resend_update_reo_cmd() - Resend the UPDATE_REO_QUEUE
+ * cmd and re-insert desc into free list if send fails.
+ *
+ * @soc: DP SOC handle
+ * @desc: desc with resend update cmd flag set
+ * @rx_tid: Desc RX tid associated with update cmd for resetting
+ * valid field to 0 in h/w
+ */
+static void dp_resend_update_reo_cmd(struct dp_soc *soc,
+				     struct reo_desc_list_node *desc,
+				     struct dp_rx_tid *rx_tid)
+{
+	struct hal_reo_cmd_params params;
+
+	qdf_mem_zero(&params, sizeof(params));
+	params.std.need_status = 1;
+	params.std.addr_lo =
+		rx_tid->hw_qdesc_paddr & 0xffffffff;
+	params.std.addr_hi =
+		(uint64_t)(rx_tid->hw_qdesc_paddr) >> 32;
+	params.u.upd_queue_params.update_vld = 1;
+	params.u.upd_queue_params.vld = 0;
+	desc->resend_update_reo_cmd = false;
+	/*
+	 * If the cmd send fails then set resend_update_reo_cmd flag
+	 * and insert the desc at the end of the free list to retry.
+	 */
+	if (dp_reo_send_cmd(soc,
+			    CMD_UPDATE_RX_REO_QUEUE,
+			    &params,
+			    dp_rx_tid_delete_cb,
+			    (void *)desc)
+	    != QDF_STATUS_SUCCESS) {
+		desc->resend_update_reo_cmd = true;
+		desc->free_ts = qdf_get_system_timestamp();
+		qdf_list_insert_back(&soc->reo_desc_freelist,
+				     (qdf_list_node_t *)desc);
+		dp_err_log("failed to send reo cmd CMD_UPDATE_RX_REO_QUEUE");
+		DP_STATS_INC(soc, rx.err.reo_cmd_send_fail, 1);
+	}
+}
+
 /*
  * dp_rx_tid_delete_cb() - Callback to flush reo descriptor HW cache
  * after deleting the entries (ie., setting valid=0)
@@ -1944,8 +2026,8 @@ error:
  * @cb_ctxt: Callback context
  * @reo_status: REO command status
  */
-static void dp_rx_tid_delete_cb(struct dp_soc *soc, void *cb_ctxt,
-	union hal_reo_status *reo_status)
+void dp_rx_tid_delete_cb(struct dp_soc *soc, void *cb_ctxt,
+			 union hal_reo_status *reo_status)
 {
 	struct reo_desc_list_node *freedesc =
 		(struct reo_desc_list_node *)cb_ctxt;
@@ -1959,6 +2041,7 @@ static void dp_rx_tid_delete_cb(struct dp_soc *soc, void *cb_ctxt,
 		qdf_mem_zero(reo_status, sizeof(*reo_status));
 		reo_status->fl_cache_status.header.status = HAL_REO_CMD_DRAIN;
 		dp_reo_desc_free(soc, (void *)freedesc, reo_status);
+		DP_STATS_INC(soc, rx.err.reo_cmd_send_drain, 1);
 		return;
 	} else if (reo_status->rx_queue_status.header.status !=
 		HAL_REO_CMD_SUCCESS) {
@@ -1980,16 +2063,37 @@ static void dp_rx_tid_delete_cb(struct dp_soc *soc, void *cb_ctxt,
 	qdf_list_insert_back_size(&soc->reo_desc_freelist,
 		(qdf_list_node_t *)freedesc, &list_size);
 
+#ifdef REO_DESC_DEFER_FREE
+	/* MCL path add the desc back to reo_desc_freelist when REO FLUSH
+	 * failed. it may cause the number of REO queue pending  in free
+	 * list is even larger than REO_CMD_RING max size and lead REO CMD
+	 * flood then cause REO HW in an unexpected condition. So it's
+	 * needed to limit the number REO cmds in a batch operation.
+	 */
+	if (list_size > REO_DESC_FREELIST_SIZE) {
+	    dp_err_log("%lu:freedesc number %d in freelist", curr_ts, list_size);
+	    /* limit the batch queue size */
+	    list_size = REO_DESC_FREELIST_SIZE;
+	}
+#endif
+
 	while ((qdf_list_peek_front(&soc->reo_desc_freelist,
 		(qdf_list_node_t **)&desc) == QDF_STATUS_SUCCESS) &&
 		((list_size >= REO_DESC_FREELIST_SIZE) ||
-		((curr_ts - desc->free_ts) > REO_DESC_FREE_DEFER_MS))) {
+		(curr_ts > (desc->free_ts + REO_DESC_FREE_DEFER_MS)) ||
+		(desc->resend_update_reo_cmd && list_size))) {
 		struct dp_rx_tid *rx_tid;
 
 		qdf_list_remove_front(&soc->reo_desc_freelist,
 				(qdf_list_node_t **)&desc);
 		list_size--;
 		rx_tid = &desc->rx_tid;
+
+		/* First process descs with resend_update_reo_cmd set */
+		if (desc->resend_update_reo_cmd) {
+			dp_resend_update_reo_cmd(soc, desc, rx_tid);
+			continue;
+		}
 
 		/* Flush and invalidate REO descriptor from HW cache: Base and
 		 * extension descriptors should be flushed separately */
@@ -2012,12 +2116,10 @@ static void dp_rx_tid_delete_cb(struct dp_soc *soc, void *cb_ctxt,
 							&params,
 							NULL,
 							NULL)) {
-				QDF_TRACE(QDF_MODULE_ID_DP,
-					QDF_TRACE_LEVEL_ERROR,
-					"%s: fail to send CMD_CACHE_FLUSH:"
-					"tid %d desc %pK", __func__,
-					rx_tid->tid,
-					(void *)(rx_tid->hw_qdesc_paddr));
+				dp_err_rl("fail to send CMD_CACHE_FLUSH:"
+					  "tid %d desc %pK", rx_tid->tid,
+					  (void *)(rx_tid->hw_qdesc_paddr));
+				DP_STATS_INC(soc, rx.err.reo_cmd_send_fail, 1);
 			}
 		}
 
@@ -2040,13 +2142,14 @@ static void dp_rx_tid_delete_cb(struct dp_soc *soc, void *cb_ctxt,
 			 * TID queue desc also need to be freed accordingly.
 			 *
 			 * Here invoke desc_free function directly to do clean up.
+			 *
+			 * In case of MCL path add the desc back to the free
+			 * desc list and defer deletion.
 			 */
-			QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
-				  "%s: fail to send REO cmd to flush cache: tid %d",
-				  __func__, rx_tid->tid);
-			qdf_mem_zero(&reo_status, sizeof(reo_status));
-			reo_status.fl_cache_status.header.status = 0;
-			dp_reo_desc_free(soc, (void *)desc, &reo_status);
+			dp_err_log("%s: fail to send REO cmd to flush cache: tid %d",
+				   __func__, rx_tid->tid);
+			dp_reo_desc_clean_up(soc, desc, &reo_status);
+			DP_STATS_INC(soc, rx.err.reo_cmd_send_fail, 1);
 		}
 	}
 	qdf_spin_unlock_bh(&soc->reo_desc_freelist_lock);
@@ -2075,6 +2178,7 @@ static int dp_rx_tid_delete_wifi3(struct dp_peer *peer, int tid)
 	}
 
 	freedesc->rx_tid = *rx_tid;
+	freedesc->resend_update_reo_cmd = false;
 
 	qdf_mem_zero(&params, sizeof(params));
 
@@ -2084,8 +2188,19 @@ static int dp_rx_tid_delete_wifi3(struct dp_peer *peer, int tid)
 	params.u.upd_queue_params.update_vld = 1;
 	params.u.upd_queue_params.vld = 0;
 
-	dp_reo_send_cmd(soc, CMD_UPDATE_RX_REO_QUEUE, &params,
-		dp_rx_tid_delete_cb, (void *)freedesc);
+	if (dp_reo_send_cmd(soc, CMD_UPDATE_RX_REO_QUEUE, &params,
+			    dp_rx_tid_delete_cb, (void *)freedesc)
+		!= QDF_STATUS_SUCCESS) {
+		/* Defer the clean up to the call back context */
+		qdf_spin_lock_bh(&soc->reo_desc_freelist_lock);
+		freedesc->free_ts = qdf_get_system_timestamp();
+		freedesc->resend_update_reo_cmd = true;
+		qdf_list_insert_front(&soc->reo_desc_freelist,
+				      (qdf_list_node_t *)freedesc);
+		DP_STATS_INC(soc, rx.err.reo_cmd_send_fail, 1);
+		qdf_spin_unlock_bh(&soc->reo_desc_freelist_lock);
+		dp_info("Failed to send CMD_UPDATE_RX_REO_QUEUE");
+	}
 
 	rx_tid->hw_qdesc_vaddr_unaligned = NULL;
 	rx_tid->hw_qdesc_alloc_size = 0;
@@ -2218,19 +2333,20 @@ void dp_peer_rx_init(struct dp_pdev *pdev, struct dp_peer *peer)
  * dp_peer_rx_cleanup() – Cleanup receive TID state
  * @vdev: Datapath vdev
  * @peer: Datapath peer
+ * @reuse: Peer reference reuse
  *
  */
-void dp_peer_rx_cleanup(struct dp_vdev *vdev, struct dp_peer *peer)
+void dp_peer_rx_cleanup(struct dp_vdev *vdev, struct dp_peer *peer, bool reuse)
 {
 	int tid;
 	uint32_t tid_delete_mask = 0;
 
-	DP_TRACE(INFO_HIGH, FL("Remove tids for peer: %pK"), peer);
+	dp_info("Remove tids for peer: %pK", peer);
 	for (tid = 0; tid < DP_MAX_TIDS; tid++) {
 		struct dp_rx_tid *rx_tid = &peer->rx_tid[tid];
 
 		qdf_spin_lock_bh(&rx_tid->tid_lock);
-		if (!peer->bss_peer && peer->vdev->opmode != wlan_op_mode_sta) {
+		if (!peer->bss_peer || peer->vdev->opmode == wlan_op_mode_sta) {
 			/* Cleanup defrag related resource */
 			dp_rx_defrag_waitlist_remove(peer, tid);
 			dp_rx_reorder_flush_frag(peer, tid);
@@ -2250,22 +2366,24 @@ void dp_peer_rx_cleanup(struct dp_vdev *vdev, struct dp_peer *peer)
 			tid_delete_mask);
 	}
 #endif
-	for (tid = 0; tid < DP_MAX_TIDS; tid++)
-		qdf_spinlock_destroy(&peer->rx_tid[tid].tid_lock);
+	if (!reuse)
+		for (tid = 0; tid < DP_MAX_TIDS; tid++)
+			qdf_spinlock_destroy(&peer->rx_tid[tid].tid_lock);
 }
 
 /*
  * dp_peer_cleanup() – Cleanup peer information
  * @vdev: Datapath vdev
  * @peer: Datapath peer
+ * @reuse: Peer reference reuse
  *
  */
-void dp_peer_cleanup(struct dp_vdev *vdev, struct dp_peer *peer)
+void dp_peer_cleanup(struct dp_vdev *vdev, struct dp_peer *peer, bool reuse)
 {
 	dp_peer_tx_cleanup(vdev, peer);
 
 	/* cleanup the Rx reorder queues for this peer */
-	dp_peer_rx_cleanup(vdev, peer);
+	dp_peer_rx_cleanup(vdev, peer, reuse);
 }
 
 /* dp_teardown_256_ba_session() - Teardown sessions using 256
@@ -2337,7 +2455,6 @@ int dp_addba_resp_tx_completion_wifi3(void *peer_handle,
 {
 	struct dp_peer *peer = (struct dp_peer *)peer_handle;
 	struct dp_rx_tid *rx_tid = NULL;
-	QDF_STATUS qdf_status;
 
 	if (!peer || peer->delete_in_progress) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_DEBUG,
@@ -2348,10 +2465,9 @@ int dp_addba_resp_tx_completion_wifi3(void *peer_handle,
 	qdf_spin_lock_bh(&rx_tid->tid_lock);
 	if (status) {
 		rx_tid->num_addba_rsp_failed++;
-		qdf_status = dp_rx_tid_update_wifi3(peer, tid, 1,
-						    IEEE80211_SEQ_MAX);
-		if (qdf_status == QDF_STATUS_SUCCESS)
-			rx_tid->ba_status = DP_RX_BA_INACTIVE;
+		dp_rx_tid_update_wifi3(peer, tid, 1,
+				       IEEE80211_SEQ_MAX);
+		rx_tid->ba_status = DP_RX_BA_INACTIVE;
 		qdf_spin_unlock_bh(&rx_tid->tid_lock);
 		dp_err("RxTid- %d addba rsp tx completion failed", tid);
 		return QDF_STATUS_SUCCESS;
@@ -2373,6 +2489,16 @@ int dp_addba_resp_tx_completion_wifi3(void *peer_handle,
 			  __func__, peer->mac_addr.raw);
 		return QDF_STATUS_E_FAILURE;
 	}
+
+	if (dp_rx_tid_update_wifi3(peer, tid,
+				   rx_tid->ba_win_size,
+				   rx_tid->startseqnum)) {
+		dp_err("%s: failed update REO SSN", __func__);
+	}
+
+	dp_info("%s: tid %u window_size %u start_seq_num %u",
+		__func__, tid, rx_tid->ba_win_size,
+		rx_tid->startseqnum);
 
 	/* First Session */
 	if (peer->active_ba_session_cnt == 0) {
@@ -2517,6 +2643,29 @@ int dp_addba_requestprocess_wifi3(void *peer_handle,
 		qdf_spin_unlock_bh(&rx_tid->tid_lock);
 		return QDF_STATUS_E_FAILURE;
 	}
+
+	if (rx_tid->rx_ba_win_size_override == 1) {
+		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO,
+			  "%s disable BA session by refuse addba req",
+			  __func__);
+
+		buffersize = 1;
+		rx_tid->userstatuscode = IEEE80211_STATUS_REFUSED;
+	} else if (rx_tid->rx_ba_win_size_override) {
+		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO,
+			  "%s override BA win to %d", __func__,
+			    rx_tid->rx_ba_win_size_override);
+
+		buffersize = rx_tid->rx_ba_win_size_override;
+		rx_tid->userstatuscode = IEEE80211_STATUS_SUCCESS;
+	} else {
+		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO,
+			  "%s restore BA win %d based on addba req",
+			  __func__, buffersize);
+
+		rx_tid->userstatuscode = IEEE80211_STATUS_SUCCESS;
+	}
+
 	dp_check_ba_buffersize(peer, tid, buffersize);
 
 	if (dp_rx_tid_setup_wifi3(peer, tid,
@@ -2706,8 +2855,6 @@ dp_set_pn_check_wifi3(struct cdp_vdev *vdev_handle, struct cdp_peer *peer_handle
 	params.u.upd_queue_params.update_svld = 1;
 	params.u.upd_queue_params.svld = 0;
 
-	peer->security[dp_sec_ucast].sec_type = sec_type;
-
 	switch (sec_type) {
 	case cdp_sec_type_tkip_nomic:
 	case cdp_sec_type_aes_ccmp:
@@ -2759,14 +2906,53 @@ dp_set_pn_check_wifi3(struct cdp_vdev *vdev_handle, struct cdp_peer *peer_handle
 				params.u.upd_queue_params.pn_127_96 = rx_pn[3];
 			}
 			rx_tid->pn_size = pn_size;
-			dp_reo_send_cmd(soc, CMD_UPDATE_RX_REO_QUEUE, &params,
-				dp_rx_tid_update_cb, rx_tid);
+			if (dp_reo_send_cmd(soc, CMD_UPDATE_RX_REO_QUEUE,
+					    &params, dp_rx_tid_update_cb,
+					    rx_tid)) {
+				dp_err_log("fail to send CMD_UPDATE_RX_REO_QUEUE"
+					   "tid %d desc %pK", rx_tid->tid,
+					   (void *)(rx_tid->hw_qdesc_paddr));
+				DP_STATS_INC(soc, rx.err.reo_cmd_send_fail, 1);
+			}
 		} else {
 			QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO_HIGH,
 				  "PN Check not setup for TID :%d ", i);
 		}
 		qdf_spin_unlock_bh(&rx_tid->tid_lock);
 	}
+}
+
+
+/**
+ * dp_set_key_sec_type_wifi3()
+ * @peer: Datapath peer handle
+ * @vdev: Datapath vdev
+ * @pdev - data path device instance
+ * @sec_type - security type
+ * @rx_pn - Receive pn starting number
+ * #is_unicast ucast/mcast key type
+ */
+
+void
+dp_set_key_sec_type_wifi3(struct cdp_vdev *vdev_handle,
+			  struct cdp_peer *peer_handle,
+			  enum cdp_sec_type sec_type,
+			  bool is_unicast)
+{
+	struct dp_peer *peer = (struct dp_peer *)peer_handle;
+	int sec_index;
+
+	QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO_HIGH,
+		  "sec type for peer %pK (%02x:%02x:%02x:%02x:%02x:%02x): %s key of type %d",
+		  peer,
+		  peer->mac_addr.raw[0], peer->mac_addr.raw[1],
+		  peer->mac_addr.raw[2], peer->mac_addr.raw[3],
+		  peer->mac_addr.raw[4], peer->mac_addr.raw[5],
+		  is_unicast ? "ucast" : "mcast",
+		  sec_type);
+
+	sec_index = is_unicast ? dp_sec_ucast : dp_sec_mcast;
+	peer->security[sec_index].sec_type = sec_type;
 }
 
 
@@ -2838,6 +3024,65 @@ dp_rx_sec_ind_handler(void *soc_handle, uint16_t peer_id,
 	dp_peer_unref_del_find_by_id(peer);
 }
 
+QDF_STATUS
+dp_rx_delba_ind_handler(void *soc_handle, uint16_t peer_id,
+			uint8_t tid, uint16_t win_sz)
+{
+	struct dp_soc *soc = (struct dp_soc *)soc_handle;
+	struct dp_peer *peer;
+	struct dp_rx_tid *rx_tid;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+
+	peer = dp_peer_find_by_id(soc, peer_id);
+
+	if (!peer) {
+		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
+			  "Couldn't find peer from ID %d",
+			  peer_id);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	qdf_assert_always(tid < DP_MAX_TIDS);
+
+	rx_tid = &peer->rx_tid[tid];
+
+	if (rx_tid->hw_qdesc_vaddr_unaligned) {
+		if (!rx_tid->delba_tx_status) {
+			QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO,
+				  "%s: PEER_ID: %d TID: %d, BA win: %d ",
+				  __func__, peer_id, tid, win_sz);
+
+			qdf_spin_lock_bh(&rx_tid->tid_lock);
+
+			rx_tid->delba_tx_status = 1;
+
+			rx_tid->rx_ba_win_size_override =
+			    qdf_min((uint16_t)63, win_sz);
+
+			rx_tid->delba_rcode =
+			    IEEE80211_REASON_QOS_SETUP_REQUIRED;
+
+			qdf_spin_unlock_bh(&rx_tid->tid_lock);
+
+			if (soc->cdp_soc.ol_ops->send_delba)
+				soc->cdp_soc.ol_ops->send_delba(
+					peer->vdev->pdev->ctrl_pdev,
+					peer->ctrl_peer,
+					peer->mac_addr.raw,
+					tid,
+					peer->vdev->ctrl_vdev,
+					rx_tid->delba_rcode);
+		}
+	} else {
+		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
+			  "BA session is not setup for TID:%d ", tid);
+		status = QDF_STATUS_E_FAILURE;
+	}
+
+	dp_peer_unref_del_find_by_id(peer);
+
+	return status;
+}
 #ifdef CONFIG_MCL
 /**
  * dp_register_peer() - Register peer into physical device
@@ -2883,16 +3128,14 @@ QDF_STATUS dp_clear_peer(struct cdp_pdev *pdev_handle, uint8_t local_id)
 {
 	struct dp_peer *peer;
 	struct dp_pdev *pdev = (struct dp_pdev *)pdev_handle;
+	struct dp_soc *soc;
 
 	peer = dp_peer_find_by_local_id((struct cdp_pdev *)pdev, local_id);
-	if (!peer)
+	if (!peer || !peer->valid)
 		return QDF_STATUS_E_FAULT;
 
-	qdf_spin_lock_bh(&peer->peer_info_lock);
-	peer->state = OL_TXRX_PEER_STATE_DISC;
-	qdf_spin_unlock_bh(&peer->peer_info_lock);
-
-	dp_rx_flush_rx_cached(peer, true);
+	soc = pdev->soc;
+	dp_clear_peer_internal(soc, peer);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -3001,7 +3244,7 @@ QDF_STATUS dp_peer_state_update(struct cdp_pdev *pdev_handle, uint8_t *peer_mac,
 	}
 	peer->state = state;
 
-	DP_TRACE(INFO, "peer %pK state %d", peer, peer->state);
+	dp_info("peer %pK state %d", peer, peer->state);
 	/* ref_cnt is incremented inside dp_peer_find_hash_find().
 	 * Decrement it here.
 	 */
@@ -3023,8 +3266,8 @@ QDF_STATUS dp_get_vdevid(void *peer_handle, uint8_t *vdev_id)
 {
 	struct dp_peer *peer = peer_handle;
 
-	DP_TRACE(INFO, "peer %pK vdev %pK vdev id %d",
-			peer, peer->vdev, peer->vdev->vdev_id);
+	dp_info("peer %pK vdev %pK vdev id %d",
+		peer, peer->vdev, peer->vdev->vdev_id);
 	*vdev_id = peer->vdev->vdev_id;
 	return QDF_STATUS_SUCCESS;
 }
@@ -3089,7 +3332,7 @@ uint8_t *dp_peer_get_peer_mac_addr(void *peer_handle)
 	uint8_t *mac;
 
 	mac = peer->mac_addr.raw;
-	DP_TRACE(INFO, "peer %pK mac 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x",
+	dp_info("peer %pK mac 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x",
 		peer, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 	return peer->mac_addr.raw;
 }
@@ -3164,7 +3407,7 @@ void dp_local_peer_id_alloc(struct dp_pdev *pdev, struct dp_peer *peer)
 		pdev->local_peer_ids.map[i] = peer;
 	}
 	qdf_spin_unlock_bh(&pdev->local_peer_ids.lock);
-	DP_TRACE(INFO, "peer %pK, local id %d", peer, peer->local_id);
+	dp_info("peer %pK, local id %d", peer, peer->local_id);
 }
 
 /**
@@ -3232,17 +3475,19 @@ uint8_t dp_get_peer_mac_addr_frm_id(struct cdp_soc_t *soc_handle,
  * @dp_stats_cmd_cb: REO command callback function
  * @cb_ctxt: Callback context
  *
- * Return: none
+ * Return: count of tid stats cmd send succeeded
  */
-void dp_peer_rxtid_stats(struct dp_peer *peer, void (*dp_stats_cmd_cb),
+int dp_peer_rxtid_stats(struct dp_peer *peer, void (*dp_stats_cmd_cb),
 			void *cb_ctxt)
 {
 	struct dp_soc *soc = peer->vdev->pdev->soc;
 	struct hal_reo_cmd_params params;
 	int i;
+	int stats_cmd_sent_cnt = 0;
+	QDF_STATUS status;
 
 	if (!dp_stats_cmd_cb)
-		return;
+		return stats_cmd_sent_cnt;
 
 	qdf_mem_zero(&params, sizeof(params));
 	for (i = 0; i < DP_MAX_TIDS; i++) {
@@ -3255,12 +3500,19 @@ void dp_peer_rxtid_stats(struct dp_peer *peer, void (*dp_stats_cmd_cb),
 				(uint64_t)(rx_tid->hw_qdesc_paddr) >> 32;
 
 			if (cb_ctxt) {
-				dp_reo_send_cmd(soc, CMD_GET_QUEUE_STATS,
-					&params, dp_stats_cmd_cb, cb_ctxt);
+				status = dp_reo_send_cmd(
+						soc, CMD_GET_QUEUE_STATS,
+						&params, dp_stats_cmd_cb,
+						cb_ctxt);
 			} else {
-				dp_reo_send_cmd(soc, CMD_GET_QUEUE_STATS,
-					&params, dp_stats_cmd_cb, rx_tid);
+				status = dp_reo_send_cmd(
+						soc, CMD_GET_QUEUE_STATS,
+						&params, dp_stats_cmd_cb,
+						rx_tid);
 			}
+
+			if (QDF_IS_STATUS_SUCCESS(status))
+				stats_cmd_sent_cnt++;
 
 			/* Flush REO descriptor from HW cache to update stats
 			 * in descriptor memory. This is to help debugging */
@@ -3275,6 +3527,8 @@ void dp_peer_rxtid_stats(struct dp_peer *peer, void (*dp_stats_cmd_cb),
 				NULL);
 		}
 	}
+
+	return stats_cmd_sent_cnt;
 }
 
 void dp_set_michael_key(struct cdp_peer *peer_handle,

@@ -519,6 +519,7 @@ struct cdp_tx_stats {
 	uint32_t ru_tones;
 	uint32_t ru_loc[MAX_RU_LOCATIONS];
 	uint32_t num_ppdu_cookie_valid;
+	uint32_t no_ack_count[QDF_PROTO_SUBTYPE_MAX];
 };
 
 /* struct cdp_rx_stats - rx Level Stats
@@ -532,6 +533,7 @@ struct cdp_tx_stats {
  * @mec_drop: Total MEC packets dropped
  * @pkts: Intra BSS packets received
  * @fail: Intra BSS packets failed
+ * @mdns_no_fwd: Intra BSS MDNS packets not forwarded
  * @mic_err: Rx MIC errors CCMP
  * @decrypt_err: Rx Decryption Errors CRC
  * @fcserr: rx MIC check failed (CCMP)
@@ -573,6 +575,7 @@ struct cdp_tx_stats {
  * @rx_ratecode: Rx rate code of last frame
  * @rx_flags: rx flags
  * @rx_rssi_measured_time: Time at which rssi is measured
+ * @rx_mpdu_cnt: rx mpdu count per MCS rate
  */
 struct cdp_rx_stats {
 	struct cdp_pkt_info to_stack;
@@ -586,6 +589,7 @@ struct cdp_rx_stats {
 	struct {
 		struct cdp_pkt_info pkts;
 		struct cdp_pkt_info fail;
+		uint32_t mdns_no_fwd;
 	} intra_bss;
 
 	struct {
@@ -629,6 +633,7 @@ struct cdp_rx_stats {
 	uint32_t rx_ratecode;
 	uint32_t rx_flags;
 	uint32_t rx_rssi_measured_time;
+	uint32_t rx_mpdu_cnt[MAX_MCS];
 };
 
 /* struct cdp_tx_ingress_stats - Tx ingress Stats
@@ -643,6 +648,8 @@ struct cdp_rx_stats {
  * @tso_pkt:total no of TSO packets
  * @non_tso_pkts: non - TSO packets
  * @dropped_host: TSO packets dropped by host
+ * @tso_no_mem_dropped: TSO packets dropped by host due to descriptor
+			unavailability
  * @dropped_target:TSO packets dropped by target
  * @sg_pkt: Total scatter gather packets
  * @non_sg_pkts: non SG packets
@@ -688,6 +695,7 @@ struct cdp_tx_ingress_stats {
 		struct cdp_pkt_info tso_pkt;
 		struct cdp_pkt_info non_tso_pkts;
 		struct cdp_pkt_info  dropped_host;
+		struct cdp_pkt_info  tso_no_mem_dropped;
 		uint32_t dropped_target;
 	} tso;
 

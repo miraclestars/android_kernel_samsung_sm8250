@@ -307,6 +307,8 @@ struct dp_tx_desc_pool_s *dp_tx_create_flow_pool(struct dp_soc *soc,
 int dp_tx_delete_flow_pool(struct dp_soc *soc, struct dp_tx_desc_pool_s *pool,
 	bool force)
 {
+	struct dp_vdev *vdev;
+
 	if (!soc || !pool) {
 		dp_err("pool or soc is NULL");
 		QDF_ASSERT(0);
@@ -333,6 +335,11 @@ int dp_tx_delete_flow_pool(struct dp_soc *soc, struct dp_tx_desc_pool_s *pool,
 	if (pool->avail_desc < pool->pool_size) {
 		pool->status = FLOW_POOL_INVALID;
 		qdf_spin_unlock_bh(&pool->flow_pool_lock);
+		/* Reset TX desc associated to this Vdev as NULL */
+		vdev = dp_get_vdev_from_soc_vdev_id_wifi3(soc,
+							  pool->flow_pool_id);
+		if (vdev)
+			dp_tx_desc_flush(vdev->pdev, vdev, false);
 		dp_err("avail desc less than pool size");
 		return -EAGAIN;
 	}
@@ -523,6 +530,20 @@ void dp_tx_flow_control_init(struct dp_soc *soc)
  */
 void dp_tx_flow_control_deinit(struct dp_soc *soc)
 {
+	struct dp_tx_desc_pool_s *tx_desc_pool;
+	int i;
+
+	for (i = 0; i < MAX_TXDESC_POOLS; i++) {
+		tx_desc_pool = &((soc)->tx_desc[i]);
+		if (!tx_desc_pool->desc_pages.num_pages)
+			continue;
+
+		if (dp_tx_desc_pool_free(soc, i)) {
+			QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO,
+				  "%s Tx Desc Pool Free failed", __func__);
+		}
+	}
+
 	qdf_spinlock_destroy(&soc->flow_pool_array_lock);
 }
 

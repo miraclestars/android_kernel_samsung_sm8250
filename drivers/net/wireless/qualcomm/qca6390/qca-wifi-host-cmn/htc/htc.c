@@ -243,8 +243,26 @@ int htc_runtime_resume(HTC_HANDLE htc_ctx)
 	qdf_sched_work(0, &target->queue_kicker);
 	return 0;
 }
+
+/**
+ * htc_runtime_pm_deinit(): runtime pm related de-intialization
+ *
+ * need to de-initialize the work item.
+ *
+ * @target: HTC target pointer
+ *
+ */
+static void htc_runtime_pm_deinit(HTC_TARGET *target)
+{
+	if (!target)
+		return;
+
+	qdf_destroy_work(0, &target->queue_kicker);
+}
+
 #else
 static inline void htc_runtime_pm_init(HTC_TARGET *target) { }
+static inline void htc_runtime_pm_deinit(HTC_TARGET *target) { }
 #endif
 
 /* registered target arrival callback from the HIF layer */
@@ -803,7 +821,7 @@ void htc_stop(HTC_HANDLE HTCHandle)
 {
 	HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(HTCHandle);
 	int i;
-	HTC_ENDPOINT *pEndpoint;
+	HTC_ENDPOINT *endpoint;
 #ifdef RX_SG_SUPPORT
 	qdf_nbuf_t netbuf;
 	qdf_nbuf_queue_t *rx_sg_queue = &target->RxSgQueue;
@@ -811,15 +829,17 @@ void htc_stop(HTC_HANDLE HTCHandle)
 
 	AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("+htc_stop\n"));
 
+	htc_runtime_pm_deinit(target);
+
 	HTC_INFO("%s: endpoints cleanup\n", __func__);
 	/* cleanup endpoints */
 	for (i = 0; i < ENDPOINT_MAX; i++) {
-		pEndpoint = &target->endpoint[i];
-		htc_flush_rx_hold_queue(target, pEndpoint);
-		htc_flush_endpoint_tx(target, pEndpoint, HTC_TX_PACKET_TAG_ALL);
-		if (pEndpoint->ul_is_polled) {
-			qdf_timer_stop(&pEndpoint->ul_poll_timer);
-			qdf_timer_free(&pEndpoint->ul_poll_timer);
+		endpoint = &target->endpoint[i];
+		htc_flush_rx_hold_queue(target, endpoint);
+		htc_flush_endpoint_tx(target, endpoint, HTC_TX_PACKET_TAG_ALL);
+		if (endpoint->ul_is_polled) {
+			qdf_timer_stop(&endpoint->ul_poll_timer);
+			qdf_timer_free(&endpoint->ul_poll_timer);
 		}
 	}
 
@@ -845,12 +865,18 @@ void htc_stop(HTC_HANDLE HTCHandle)
 	 * In SSR case, HTC tx completion callback for wmi will be blocked
 	 * by TARGET_STATUS_RESET and HTC packets will be left unfreed on
 	 * lookup queue.
+	 *
+	 * In case of target failing to send wmi_ready_event, the htc connect
+	 * msg buffer will be left unmapped and not freed. So calling the
+	 * completion handler for this buffer will handle this scenario.
 	 */
 	HTC_INFO("%s: flush endpoints Tx lookup queue\n", __func__);
 	for (i = 0; i < ENDPOINT_MAX; i++) {
-		pEndpoint = &target->endpoint[i];
-		if (pEndpoint->service_id == WMI_CONTROL_SVC)
+		endpoint = &target->endpoint[i];
+		if (endpoint->service_id == WMI_CONTROL_SVC)
 			htc_flush_endpoint_txlookupQ(target, i, false);
+		else if (endpoint->service_id == HTC_CTRL_RSVD_SVC)
+			htc_flush_endpoint_txlookupQ(target, i, true);
 	}
 	HTC_INFO("%s: resetting endpoints state\n", __func__);
 
@@ -1086,14 +1112,16 @@ int htc_pm_runtime_get(HTC_HANDLE htc_handle)
 {
 	HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(htc_handle);
 
-	return hif_pm_runtime_get(target->hif_dev);
+	return hif_pm_runtime_get(target->hif_dev,
+				  RTPM_ID_HTC);
 }
 
 int htc_pm_runtime_put(HTC_HANDLE htc_handle)
 {
 	HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(htc_handle);
 
-	return hif_pm_runtime_put(target->hif_dev);
+	return hif_pm_runtime_put(target->hif_dev,
+				  RTPM_ID_HTC);
 }
 #endif
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -100,6 +100,10 @@
 
 #ifdef WMI_STA_SUPPORT
 #include "wmi_unified_sta_api.h"
+#endif
+
+#ifdef WLAN_FW_OFFLOAD
+#include "wmi_unified_fwol_api.h"
 #endif
 
 typedef qdf_nbuf_t wmi_buf_t;
@@ -280,6 +284,45 @@ QDF_STATUS
 wmi_unified_cmd_send_fl(wmi_unified_t wmi_handle, wmi_buf_t buf,
 			uint32_t buflen, uint32_t cmd_id,
 			const char *func, uint32_t line);
+
+#ifdef WLAN_FEATURE_WMI_SEND_RECV_QMI
+/**
+ * wmi_unified_cmd_send_over_qmi() -  generic function to send unified WMI command
+ *                               over QMI
+ * @wmi_handle: handle to WMI.
+ * @buf: wmi command buffer
+ * @buflen: wmi command buffer length
+ * @cmd_id: WMI cmd id
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wmi_unified_cmd_send_over_qmi(struct wmi_unified *wmi_handle,
+				    wmi_buf_t buf, uint32_t buflen,
+				    uint32_t cmd_id);
+
+/**
+ * wmi_process_qmi_fw_event() - Process WMI event received over QMI
+ * @wmi_cb_ctx: WMI handle received as call back context
+ * @buf: Pointer to WMI event buffer
+ * @len: Len of WMI buffer received
+ *
+ * Return: None
+ */
+int wmi_process_qmi_fw_event(void *wmi_cb_ctx, void *buf, int len);
+#else
+static inline
+QDF_STATUS wmi_unified_cmd_send_over_qmi(struct wmi_unified *wmi_handle,
+				    wmi_buf_t buf, uint32_t buflen,
+				    uint32_t cmd_id)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline int wmi_process_qmi_fw_event(void *wmi_cb_ctx, void *buf, int len)
+{
+	return -EINVAL;
+}
+#endif
 
 /**
  * wmi_unified_register_event() - WMI event handler
@@ -467,6 +510,65 @@ void *wmi_unified_get_pdev_handle(struct wmi_soc *soc, uint32_t pdev_idx);
 void wmi_process_fw_event(struct wmi_unified *wmi_handle, wmi_buf_t evt_buf);
 uint16_t wmi_get_max_msg_len(wmi_unified_t wmi_handle);
 
+/**
+ * wmi_unified_extract_roam_trigger_stats() - Extract roam trigger related
+ * stats
+ * @wmi:        wmi handle
+ * @evt_buf:    Pointer to the event buffer
+ * @trig:       Pointer to destination structure to fill data
+ * @idx:        TLV id
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wmi_unified_extract_roam_trigger_stats(wmi_unified_t wmi, void *evt_buf,
+				       struct wmi_roam_trigger_info *trig,
+				       uint8_t idx);
+
+/**
+ * wmi_unified_extract_roam_scan_stats() - Extract roam scan stats from
+ * firmware
+ * @wmi:        wmi handle
+ * @evt_buf:    Pointer to the event buffer
+ * @dst:        Pointer to destination structure to fill data
+ * @idx:        TLV id
+ * @chan_idx:   Index of the channel frequency for this roam trigger
+ * @ap_idx:     Index of the candidate AP for this roam trigger
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wmi_unified_extract_roam_scan_stats(wmi_unified_t wmi, void *evt_buf,
+				    struct wmi_roam_scan_data *dst, uint8_t idx,
+				    uint8_t chan_idx, uint8_t ap_idx);
+/**
+ * wmi_unified_extract_roam_result_stats() - Extract roam result related stats
+ * @wmi:        wmi handle
+ * @evt_buf:    Pointer to the event buffer
+ * @dst:        Pointer to destination structure to fill data
+ * @idx:        TLV id
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wmi_unified_extract_roam_result_stats(wmi_unified_t wmi, void *evt_buf,
+				      struct wmi_roam_result *dst,
+				      uint8_t idx);
+
+/**
+ * wmi_unified_extract_roam_11kv_stats() - Extract BTM/Neigh report stats
+ * @wmi:       wmi handle
+ * @evt_buf:   Pointer to the event buffer
+ * @dst:       Pointer to destination structure to fill data
+ * @idx:       TLV id
+ * @rpt_idx:   index of the current channel
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wmi_unified_extract_roam_11kv_stats(wmi_unified_t wmi, void *evt_buf,
+				    struct wmi_neighbor_report_data *dst,
+				    uint8_t idx, uint8_t rpt_idx);
 
 QDF_STATUS wmi_unified_vdev_create_send(void *wmi_hdl,
 				 uint8_t macaddr[QDF_MAC_ADDR_SIZE],
@@ -1331,6 +1433,20 @@ QDF_STATUS wmi_unified_peer_rx_reorder_queue_remove_send(void *wmi_hdl,
 
 QDF_STATUS wmi_extract_service_ready_ext(void *wmi_hdl, uint8_t *evt_buf,
 		struct wlan_psoc_host_service_ext_param *param);
+
+/*
+ * wmi_extract_service_ready_ext2() - extract extended2 service ready
+ * @wmi_handle: wmi handle
+ * @evt_buff: pointer to event buffer
+ * @param: wmi ext2 base parameters
+ *
+ *
+ * Return: QDF_STATUS_SUCCESS on success, QDF_STATUS_E_** on error
+ */
+QDF_STATUS wmi_extract_service_ready_ext2(
+		struct wmi_unified *wmi_handle, uint8_t *evt_buf,
+		struct wlan_psoc_host_service_ext2_param *param);
+
 QDF_STATUS wmi_extract_hw_mode_cap_service_ready_ext(
 			void *wmi_hdl,
 			uint8_t *evt_buf, uint8_t hw_mode_idx,

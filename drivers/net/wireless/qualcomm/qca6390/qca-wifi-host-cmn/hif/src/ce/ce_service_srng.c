@@ -108,7 +108,7 @@ void hif_record_ce_srng_desc_event(struct hif_softc *scn, int ce_id,
 
 	event = &hist_ev[record_index];
 
-	qdf_mem_zero(event, sizeof(struct hif_ce_desc_event));
+	hif_clear_ce_desc_debug_data(event);
 
 	event->type = type;
 	event->time = qdf_get_log_timestamp();
@@ -124,10 +124,13 @@ void hif_record_ce_srng_desc_event(struct hif_softc *scn, int ce_id,
 	event->memory = memory;
 	event->index = index;
 
+	if (event->type == HIF_CE_SRC_RING_BUFFER_POST)
+		hif_ce_desc_record_rx_paddr(scn, event, memory);
+
 	if (ce_hist->data_enable[ce_id])
 		hif_ce_desc_data_record(event, len);
 }
-#endif
+#endif /* HIF_CONFIG_SLUB_DEBUG_ON || HIF_CE_DEBUG_DATA_BUF */
 
 static int
 ce_send_nolock_srng(struct CE_handle *copyeng,
@@ -340,8 +343,10 @@ ce_recv_buf_enqueue_srng(struct CE_handle *copyeng,
 								write_index);
 			status = QDF_STATUS_SUCCESS;
 		}
-	} else
+	} else {
+		dest_desc = NULL;
 		status = QDF_STATUS_E_FAILURE;
+	}
 
 	dest_ring->write_index = write_index;
 	hal_srng_access_end(scn->hal_soc, dest_ring->srng_ctx);
@@ -412,7 +417,7 @@ ce_completed_recv_next_nolock_srng(struct CE_state *CE_state,
 	unsigned int nentries_mask = dest_ring->nentries_mask;
 	unsigned int sw_index = dest_ring->sw_index;
 	struct hif_softc *scn = CE_state->scn;
-	struct ce_srng_dest_status_desc *dest_status;
+	struct ce_srng_dest_status_desc *dest_status = NULL;
 	int nbytes;
 	struct ce_srng_dest_status_desc dest_status_info;
 
@@ -421,13 +426,13 @@ ce_completed_recv_next_nolock_srng(struct CE_state *CE_state,
 		goto done;
 	}
 
-	dest_status = hal_srng_dst_get_next(scn->hal_soc,
-						status_ring->srng_ctx);
-
+	dest_status = hal_srng_dst_peek(scn->hal_soc, status_ring->srng_ctx);
 	if (!dest_status) {
 		status = QDF_STATUS_E_FAILURE;
+		hal_srng_access_end_reap(scn->hal_soc, status_ring->srng_ctx);
 		goto done;
 	}
+
 	/*
 	 * By copying the dest_desc_info element to local memory, we could
 	 * avoid extra memory read from non-cachable memory.
@@ -435,15 +440,27 @@ ce_completed_recv_next_nolock_srng(struct CE_state *CE_state,
 	dest_status_info = *dest_status;
 	nbytes = dest_status_info.nbytes;
 	if (nbytes == 0) {
+		uint32_t hp, tp;
+
 		/*
 		 * This closes a relatively unusual race where the Host
 		 * sees the updated DRRI before the update to the
 		 * corresponding descriptor has completed. We treat this
 		 * as a descriptor that is not yet done.
 		 */
+		hal_get_sw_hptp(scn->hal_soc, status_ring->srng_ctx,
+				&hp, &tp);
+		hif_info("No data to reap, hp %d tp %d", hp, tp);
 		status = QDF_STATUS_E_FAILURE;
+		hal_srng_access_end_reap(scn->hal_soc, status_ring->srng_ctx);
 		goto done;
 	}
+
+	/*
+	 * Move the tail pointer since nbytes is non-zero and
+	 * this entry is processed.
+	 */
+	hal_srng_dst_get_next(scn->hal_soc, status_ring->srng_ctx);
 
 	dest_status->nbytes = 0;
 
@@ -469,25 +486,22 @@ ce_completed_recv_next_nolock_srng(struct CE_state *CE_state,
 	dest_ring->sw_index = sw_index;
 	status = QDF_STATUS_SUCCESS;
 
-done:
 	hal_srng_access_end(scn->hal_soc, status_ring->srng_ctx);
+	hif_record_ce_srng_desc_event(scn, CE_state->id,
+				      HIF_CE_DEST_RING_BUFFER_REAP,
+				      NULL,
+				      dest_ring->
+				      per_transfer_context[sw_index],
+				      dest_ring->sw_index, nbytes,
+				      dest_ring->srng_ctx);
 
-	if (status == QDF_STATUS_SUCCESS) {
-		hif_record_ce_srng_desc_event(scn, CE_state->id,
-					      HIF_CE_DEST_RING_BUFFER_REAP,
-					      NULL,
-					      dest_ring->
-					      per_transfer_context[sw_index],
-					      dest_ring->sw_index, nbytes,
-					      dest_ring->srng_ctx);
-
-		hif_record_ce_srng_desc_event(scn, CE_state->id,
-					      HIF_CE_DEST_STATUS_RING_REAP,
-					      (union ce_srng_desc *)dest_status,
-					      NULL,
-					      -1, 0,
-					      status_ring->srng_ctx);
-	}
+done:
+	hif_record_ce_srng_desc_event(scn, CE_state->id,
+				      HIF_CE_DEST_STATUS_RING_REAP,
+				      (union ce_srng_desc *)dest_status,
+				      NULL,
+				      -1, 0,
+				      status_ring->srng_ctx);
 
 	return status;
 }

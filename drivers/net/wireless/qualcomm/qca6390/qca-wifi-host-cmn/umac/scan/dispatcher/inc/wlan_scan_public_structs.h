@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -28,6 +28,7 @@
 #include <qdf_atomic.h>
 #include <wlan_cmn_ieee80211.h>
 #include <wlan_mgmt_txrx_utils_api.h>
+#include <reg_services_public_struct.h>
 
 typedef uint16_t wlan_scan_requester;
 typedef uint32_t wlan_scan_id;
@@ -159,6 +160,7 @@ struct element_info {
  * @esp: pointer to ESP indication ie
  * @mbo_oce: pointer to mbo/oce indication ie
  * @adaptive_11r: pointer to adaptive 11r IE
+ * @single_pmk: Pointer to sae single pmk IE
  */
 struct ie_list {
 	uint8_t *tim;
@@ -208,6 +210,7 @@ struct ie_list {
 	uint8_t *muedca;
 	uint8_t *extender;
 	uint8_t *adaptive_11r;
+	uint8_t *single_pmk;
 };
 
 enum scan_entry_connection_state {
@@ -281,6 +284,11 @@ struct scan_mbssid_info {
 	uint8_t trans_bssid[QDF_MAC_ADDR_SIZE];
 };
 
+#define SCAN_SECURITY_TYPE_WEP 0x01
+#define SCAN_SECURITY_TYPE_WPA 0x02
+#define SCAN_SECURITY_TYPE_WAPI 0x04
+#define SCAN_SECURITY_TYPE_RSN 0x08
+
 /**
  * struct scan_cache_entry: structure containing scan entry
  * @frm_subtype: updated from beacon/probe
@@ -288,6 +296,7 @@ struct scan_mbssid_info {
  * @mac_addr: mac address
  * @ssid: ssid
  * @is_hidden_ssid: is AP having hidden ssid.
+ * @security_type: security supported
  * @seq_num: sequence number
  * @phy_mode: Phy mode of the AP
  * @avg_rssi: Average RSSI fof the AP
@@ -327,6 +336,7 @@ struct scan_cache_entry {
 	struct qdf_mac_addr mac_addr;
 	struct wlan_ssid ssid;
 	bool is_hidden_ssid;
+	uint8_t security_type;
 	uint16_t seq_num;
 	enum wlan_phymode phy_mode;
 	int32_t avg_rssi;
@@ -571,13 +581,13 @@ struct scan_filter {
 	uint8_t country[3];
 	struct qdf_mac_addr bssid_list[WLAN_SCAN_FILTER_NUM_BSSID];
 	struct wlan_ssid ssid_list[WLAN_SCAN_FILTER_NUM_SSID];
-	uint8_t channel_list[QDF_MAX_NUM_CHAN];
+	uint8_t channel_list[NUM_CHANNELS];
 	enum wlan_auth_type auth_type[WLAN_NUM_OF_SUPPORT_AUTH_TYPE];
 	enum wlan_enc_type enc_type[WLAN_NUM_OF_ENCRYPT_TYPE];
 	enum wlan_enc_type mc_enc_type[WLAN_NUM_OF_ENCRYPT_TYPE];
-	uint8_t pcl_channel_list[QDF_MAX_NUM_CHAN];
+	uint8_t pcl_channel_list[NUM_CHANNELS];
 	struct fils_filter_info fils_scan_filter;
-	uint8_t pcl_weight_list[QDF_MAX_NUM_CHAN];
+	uint8_t pcl_weight_list[NUM_CHANNELS];
 	struct qdf_mac_addr bssid_hint;
 };
 
@@ -1157,7 +1167,7 @@ enum scan_cb_type {
 
 /* Set PNO */
 #define SCAN_PNO_MAX_PLAN_REQUEST   2
-#define SCAN_PNO_MAX_NETW_CHANNELS_EX  60
+#define SCAN_PNO_MAX_NETW_CHANNELS_EX  (NUM_CHANNELS)
 #define SCAN_PNO_MAX_SUPP_NETWORKS  16
 #define SCAN_PNO_DEF_SLOW_SCAN_MULTIPLIER 6
 #define SCAN_PNO_DEF_SCAN_TIMER_REPEAT 20

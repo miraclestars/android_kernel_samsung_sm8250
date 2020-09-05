@@ -43,8 +43,10 @@ static void wlan_cfg80211_mc_cp_stats_dealloc(void *priv)
 {
 	struct stats_event *stats = priv;
 
-	if (!stats)
+	if (!stats) {
+		cfg80211_err("stats is NULL");
 		return;
+	}
 
 	qdf_mem_free(stats->pdev_stats);
 	qdf_mem_free(stats->peer_stats);
@@ -489,6 +491,8 @@ wlan_cfg80211_mc_cp_stats_get_station_stats(struct wlan_objmgr_vdev *vdev,
 		.dealloc = wlan_cfg80211_mc_cp_stats_dealloc,
 	};
 
+	cfg80211_debug("Enter");
+
 	out = qdf_mem_malloc(sizeof(*out));
 	if (!out) {
 		*errno = -ENOMEM;
@@ -557,11 +561,15 @@ wlan_cfg80211_mc_cp_stats_get_station_stats(struct wlan_objmgr_vdev *vdev,
 	priv->peer_adv_stats = NULL;
 	osif_request_put(request);
 
+	cfg80211_debug("Exit");
+
 	return out;
 
 get_station_stats_fail:
 	osif_request_put(request);
 	wlan_cfg80211_mc_cp_stats_free_stats_event(out);
+
+	cfg80211_debug("Exit");
 
 	return NULL;
 }

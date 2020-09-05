@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -204,6 +204,8 @@ struct sar_limit_event {
  * @cache_id: PMK Cache ID
  * @cat_flag: whether (bssid) or (ssid,cache_id) is valid
  * @action_flag: add/delete the entry
+ * @is_flush_all: FLAG to indicate PMKSA flush. True if PMKSA cache flush is
+ * needed.
  */
 struct wmi_unified_pmk_cache {
 	uint8_t             vdev_id;
@@ -216,6 +218,7 @@ struct wmi_unified_pmk_cache {
 	uint32_t            cache_id;
 	uint32_t            cat_flag;
 	uint32_t            action_flag;
+	bool                is_flush_all;
 };
 
 #define WMI_QOS_NUM_AC_MAX 4
@@ -269,8 +272,6 @@ struct flashing_req_params {
 	uint32_t led_x1;
 };
 
-#define MAX_NUM_CHAN 128
-
 /**
  * struct wmi_pcl_chan_weights - Params to get the valid weighed list
  * @pcl_list: Preferred channel list already sorted in the order of preference
@@ -284,12 +285,12 @@ struct flashing_req_params {
  * @weight_list: Weights assigned by policy manager
  */
 struct wmi_pcl_chan_weights {
-	uint8_t pcl_list[MAX_NUM_CHAN];
+	uint8_t pcl_list[NUM_CHANNELS];
 	uint32_t pcl_len;
-	uint8_t saved_chan_list[MAX_NUM_CHAN];
+	uint8_t saved_chan_list[NUM_CHANNELS];
 	uint32_t saved_num_chan;
-	uint8_t weighed_valid_list[MAX_NUM_CHAN];
-	uint8_t weight_list[MAX_NUM_CHAN];
+	uint8_t weighed_valid_list[NUM_CHANNELS];
+	uint8_t weight_list[NUM_CHANNELS];
 };
 
 /**

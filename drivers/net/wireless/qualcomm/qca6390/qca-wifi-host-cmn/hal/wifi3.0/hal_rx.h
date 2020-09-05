@@ -263,6 +263,28 @@ enum hal_rx_ret_buf_manager {
 		BUFFER_ADDR_INFO_1_RETURN_BUFFER_MANAGER_MASK,	\
 		BUFFER_ADDR_INFO_1_RETURN_BUFFER_MANAGER_LSB))
 
+#define HAL_RX_LINK_COOKIE_INVALID_MASK 0x40000000
+
+#define HAL_RX_BUF_LINK_COOKIE_INVALID_GET(buff_addr_info) \
+		((*(((unsigned int *)buff_addr_info) + \
+		(BUFFER_ADDR_INFO_1_SW_BUFFER_COOKIE_OFFSET >> 2))) & \
+		HAL_RX_LINK_COOKIE_INVALID_MASK)
+
+#define HAL_RX_BUF_LINK_COOKIE_INVALID_SET(buff_addr_info) \
+		((*(((unsigned int *)buff_addr_info) + \
+		(BUFFER_ADDR_INFO_1_SW_BUFFER_COOKIE_OFFSET >> 2))) |= \
+		HAL_RX_LINK_COOKIE_INVALID_MASK)
+
+#define HAL_RX_REO_BUF_LINK_COOKIE_INVALID_GET(reo_desc)	\
+		(HAL_RX_BUF_LINK_COOKIE_INVALID_GET(&		\
+		(((struct reo_destination_ring *)	\
+			reo_desc)->buf_or_link_desc_addr_info)))
+
+#define HAL_RX_REO_BUF_LINK_COOKIE_INVALID_SET(reo_desc)	\
+		(HAL_RX_BUF_LINK_COOKIE_INVALID_SET(&		\
+		(((struct reo_destination_ring *)	\
+			reo_desc)->buf_or_link_desc_addr_info)))
+
 /* TODO: Convert the following structure fields accesseses to offsets */
 
 #define HAL_RX_REO_BUFFER_ADDR_39_32_GET(reo_desc)	\
@@ -2298,6 +2320,45 @@ static inline bool hal_rx_reo_is_2k_jump(void *rx_desc)
 }
 
 /**
+ * hal_rx_reo_is_oor_error() - Indicate if this error was caused by OOR
+ *
+ * @ring_desc: opaque pointer used by HAL to get the REO destination entry
+ *
+ * Return: true: error caused by OOR, false: other error
+ */
+static inline bool hal_rx_reo_is_oor_error(void *rx_desc)
+{
+	struct reo_destination_ring *reo_desc =
+			(struct reo_destination_ring *)rx_desc;
+
+	return (HAL_RX_REO_ERROR_GET(reo_desc) ==
+		HAL_REO_ERR_REGULAR_FRAME_OOR) ? true : false;
+}
+
+#define HAL_WBM_RELEASE_RING_DESC_LEN_DWORDS (NUM_OF_DWORDS_WBM_RELEASE_RING)
+/**
+ * hal_dump_wbm_rel_desc() - dump wbm release descriptor
+ * @hal_desc: hardware descriptor pointer
+ *
+ * This function will print wbm release descriptor
+ *
+ * Return: none
+ */
+static inline void hal_dump_wbm_rel_desc(void *src_srng_desc)
+{
+	uint32_t *wbm_comp = (uint32_t *)src_srng_desc;
+	uint32_t i;
+
+	QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_FATAL,
+		  "Current Rx wbm release descriptor is");
+
+	for (i = 0; i < HAL_WBM_RELEASE_RING_DESC_LEN_DWORDS; i++) {
+		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_FATAL,
+			  "DWORD[i] = 0x%x", wbm_comp[i]);
+	}
+}
+
+/**
  * hal_rx_msdu_link_desc_set: Retrieves MSDU Link Descriptor to WBM
  *
  * @ soc		: HAL version of the SOC pointer
@@ -2314,16 +2375,36 @@ static inline void hal_rx_msdu_link_desc_set(struct hal_soc *soc,
 {
 	struct wbm_release_ring *wbm_rel_srng =
 			(struct wbm_release_ring *)src_srng_desc;
+	uint32_t addr_31_0;
+	uint8_t addr_39_32;
 
 	/* Structure copy !!! */
 	wbm_rel_srng->released_buff_or_desc_addr_info =
 				*((struct buffer_addr_info *)buf_addr_info);
+
+	addr_31_0 =
+	wbm_rel_srng->released_buff_or_desc_addr_info.buffer_addr_31_0;
+	addr_39_32 =
+	wbm_rel_srng->released_buff_or_desc_addr_info.buffer_addr_39_32;
+
 	HAL_DESC_SET_FIELD(src_srng_desc, WBM_RELEASE_RING_2,
 		RELEASE_SOURCE_MODULE, HAL_RX_WBM_ERR_SRC_SW);
 	HAL_DESC_SET_FIELD(src_srng_desc, WBM_RELEASE_RING_2, BM_ACTION,
 		bm_action);
 	HAL_DESC_SET_FIELD(src_srng_desc, WBM_RELEASE_RING_2,
 		BUFFER_OR_DESC_TYPE, HAL_RX_WBM_BUF_TYPE_MSDU_LINK_DESC);
+
+	/* WBM error is indicated when any of the link descriptors given to
+	 * WBM has a NULL address, and one those paths is the link descriptors
+	 * released from host after processing RXDMA errors,
+	 * or from Rx defrag path, and we want to add an assert here to ensure
+	 * host is not releasing descriptors with NULL address.
+	 */
+
+	if (qdf_unlikely(!addr_31_0 && !addr_39_32)) {
+		hal_dump_wbm_rel_desc(src_srng_desc);
+		qdf_assert_always(0);
+	}
 }
 
 /*
@@ -3346,4 +3427,63 @@ bool HAL_IS_DECAP_FORMAT_RAW(uint8_t *rx_tlv_hdr)
 	return true;
 }
 #endif
+
+/**
+ * hal_rx_buffer_addr_info_get_paddr(): get paddr/sw_cookie from
+ *					<struct buffer_addr_info> structure
+ * @buf_addr_info: pointer to <struct buffer_addr_info> structure
+ * @buf_info: structure to return the buffer information including
+ *		paddr/cookie
+ *
+ * return: None
+ */
+static inline
+void hal_rx_buffer_addr_info_get_paddr(void *buf_addr_info,
+				       struct hal_buf_info *buf_info)
+{
+	buf_info->paddr =
+	 (HAL_RX_BUFFER_ADDR_31_0_GET(buf_addr_info) |
+	  ((uint64_t)(HAL_RX_BUFFER_ADDR_39_32_GET(buf_addr_info)) << 32));
+
+	buf_info->sw_cookie = HAL_RX_BUF_COOKIE_GET(buf_addr_info);
+}
+
+/**
+ * hal_rx_get_next_msdu_link_desc_buf_addr_info(): get next msdu link desc
+ *						   buffer addr info
+ * @link_desc_va: pointer to current msdu link Desc
+ * @next_addr_info: buffer to save next msdu link Desc buffer addr info
+ *
+ * return: None
+ */
+static inline
+void hal_rx_get_next_msdu_link_desc_buf_addr_info(
+				void *link_desc_va,
+				struct buffer_addr_info *next_addr_info)
+{
+	struct rx_msdu_link *msdu_link = link_desc_va;
+
+	if (!msdu_link) {
+		qdf_mem_zero(next_addr_info,
+			     sizeof(struct buffer_addr_info));
+		return;
+	}
+
+	*next_addr_info = msdu_link->next_msdu_link_desc_addr_info;
+}
+
+/**
+ * hal_rx_is_buf_addr_info_valid(): check is the buf_addr_info valid
+ *
+ * @buf_addr_info: pointer to buf_addr_info structure
+ *
+ * return: true: has valid paddr, false: not.
+ */
+static inline
+bool hal_rx_is_buf_addr_info_valid(
+				struct buffer_addr_info *buf_addr_info)
+{
+	return (HAL_RX_BUFFER_ADDR_31_0_GET(buf_addr_info) == 0) ?
+						false : true;
+}
 #endif /* _HAL_RX_H */

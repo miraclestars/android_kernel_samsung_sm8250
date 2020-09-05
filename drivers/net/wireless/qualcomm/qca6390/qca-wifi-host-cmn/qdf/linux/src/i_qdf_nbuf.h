@@ -112,7 +112,7 @@ typedef union {
  * @rx.dev.priv_cb_m.dp.wifi3.msdu_len: length of RX packet
  * @rx.dev.priv_cb_m.dp.wifi3.peer_id:  peer_id for RX packet
  * @rx.dev.priv_cb_m.dp.wifi2.map_index:
- * @rx.dev.priv_cb_m.peer_local_id: peer_local_id for RX pkt
+ * @rx.dev.priv_cb_m.vdev_id: vdev_id for RX pkt
  * @rx.dev.priv_cb_m.ipa_owned: packet owned by IPA
  *
  * @rx.lro_eligible: flag to indicate whether the MSDU is LRO eligible
@@ -152,6 +152,7 @@ typedef union {
  * @rx.is_raw_frame: RAW frame
  * @rx.fcs_err: FCS error
  * @rx.tid_val: tid value
+ * @rx.flag_retry: flag to indicate MSDU is retried
  * @rx.reserved: reserved
  *
  * @tx.dev.priv_cb_w.fctx: ctx to handle special pkts defined by ftype
@@ -221,7 +222,8 @@ struct qdf_nbuf_cb {
 					 */
 					uint32_t ipa_owned:1,
 						 reserved:15,
-						 peer_local_id:16;
+						 vdev_id:8,
+						 reserved1:8;
 					uint32_t tcp_seq_num;
 					uint32_t tcp_ack_num;
 					union {
@@ -267,7 +269,8 @@ struct qdf_nbuf_cb {
 			uint8_t is_raw_frame:1,
 				fcs_err:1,
 				tid_val:4,
-				reserved:2;
+				flag_retry:1,
+				reserved:1;
 		} rx;
 
 		/* Note: MAX: 40 bytes */
@@ -405,6 +408,10 @@ QDF_COMPILE_TIME_ASSERT(qdf_nbuf_cb_size,
 #define QDF_NBUF_CB_RX_SA_VALID(skb) \
 	(((struct qdf_nbuf_cb *) \
 	((skb)->cb))->u.rx.flag_sa_valid)
+
+#define QDF_NBUF_CB_RX_RETRY_FLAG(skb) \
+	(((struct qdf_nbuf_cb *) \
+	((skb)->cb))->u.rx.flag_retry)
 
 #define QDF_NBUF_CB_RX_RAW_FRAME(skb) \
 	(((struct qdf_nbuf_cb *) \
@@ -645,6 +652,12 @@ typedef void (*qdf_nbuf_free_t)(__qdf_nbuf_t);
 #define __qdf_nbuf_is_sa_valid(skb) \
 	(QDF_NBUF_CB_RX_SA_VALID((skb)))
 
+#define __qdf_nbuf_set_rx_retry_flag(skb, val) \
+	((QDF_NBUF_CB_RX_RETRY_FLAG((skb))) = val)
+
+#define __qdf_nbuf_is_rx_retry_flag(skb) \
+	(QDF_NBUF_CB_RX_RETRY_FLAG((skb)))
+
 #define __qdf_nbuf_set_raw_frame(skb, val) \
 	((QDF_NBUF_CB_RX_RAW_FRAME((skb))) = val)
 
@@ -693,6 +706,9 @@ typedef void (*qdf_nbuf_free_t)(__qdf_nbuf_t);
 	QDF_NBUF_CB_TX_DATA_ATTR(skb)
 #define __qdf_nbuf_data_attr_set(skb, data_attr) \
 	(QDF_NBUF_CB_TX_DATA_ATTR(skb) = (data_attr))
+
+#define __qdf_nbuf_queue_walk_safe(queue, var, tvar)	\
+		skb_queue_walk_safe(queue, var, tvar)
 
 /**
  * __qdf_nbuf_num_frags_init() - init extra frags
@@ -779,6 +795,7 @@ bool __qdf_nbuf_data_is_ipv6_udp_pkt(uint8_t *data);
 bool __qdf_nbuf_data_is_ipv6_tcp_pkt(uint8_t *data);
 bool __qdf_nbuf_data_is_ipv4_dhcp_pkt(uint8_t *data);
 bool __qdf_nbuf_data_is_ipv6_dhcp_pkt(uint8_t *data);
+bool __qdf_nbuf_data_is_ipv6_mdns_pkt(uint8_t *data);
 bool __qdf_nbuf_data_is_ipv4_eapol_pkt(uint8_t *data);
 bool __qdf_nbuf_data_is_ipv4_arp_pkt(uint8_t *data);
 bool __qdf_nbuf_is_bcast_pkt(__qdf_nbuf_t nbuf);
@@ -1071,6 +1088,22 @@ static inline void
 __qdf_nbuf_set_tail_pointer(struct sk_buff *skb, int len)
 {
 	skb_set_tail_pointer(skb, len);
+}
+
+/**
+ * __qdf_nbuf_unlink_no_lock() - unlink an skb from skb queue
+ * @skb: Pointer to network buffer
+ * @list: list to use
+ *
+ * This is a lockless version, driver must acquire locks if it
+ * needs to synchronize
+ *
+ * Return: none
+ */
+static inline void
+__qdf_nbuf_unlink_no_lock(struct sk_buff *skb, struct sk_buff_head *list)
+{
+	__skb_unlink(skb, list);
 }
 
 /**
@@ -2176,6 +2209,30 @@ static inline
 void __qdf_nbuf_queue_head_purge(struct sk_buff_head *skb_queue_head)
 {
 	return skb_queue_purge(skb_queue_head);
+}
+
+/**
+ * __qdf_nbuf_queue_head_lock() - Acquire the skb list lock
+ * @head: skb list for which lock is to be acquired
+ *
+ * Return: void
+ */
+static inline
+void __qdf_nbuf_queue_head_lock(struct sk_buff_head *skb_queue_head)
+{
+	spin_lock_bh(&skb_queue_head->lock);
+}
+
+/**
+ * __qdf_nbuf_queue_head_unlock() - Release the skb list lock
+ * @head: skb list for which lock is to be release
+ *
+ * Return: void
+ */
+static inline
+void __qdf_nbuf_queue_head_unlock(struct sk_buff_head *skb_queue_head)
+{
+	spin_unlock_bh(&skb_queue_head->lock);
 }
 
 #ifdef CONFIG_WIN
