@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -29,8 +29,9 @@
 #include <qdf_mc_timer.h>
 #include <wlan_cmn.h>
 #include <wlan_cmn_ieee80211.h>
-
-struct wlan_objmgr_psoc;
+#ifdef FEATURE_RUNTIME_PM
+#include <wlan_pmo_common_public_struct.h>
+#endif
 
 #define WLAN_TDLS_STA_MAX_NUM                        8
 #define WLAN_TDLS_STA_P_UAPSD_OFFCHAN_MAX_NUM        1
@@ -51,14 +52,21 @@ struct wlan_objmgr_psoc;
 
 #define AC_PRIORITY_NUM                 4
 
-/* default tdls serialize timeout is set to 4 secs */
-#define TDLS_DEFAULT_SERIALIZE_CMD_TIMEOUT 4000
+/* Default tdls serialize timeout is set to 4 (peer delete) + 1 secs */
+#ifdef FEATURE_RUNTIME_PM
+/* Add extra PMO_RESUME_TIMEOUT for runtime PM resume timeout */
+#define TDLS_DELETE_PEER_CMD_TIMEOUT (4000 + 1000 + PMO_RESUME_TIMEOUT)
+#else
+#define TDLS_DELETE_PEER_CMD_TIMEOUT (4000 + 1000)
+#endif
+
+/** Maximum time(ms) to wait for tdls del sta to complete **/
+#define WAIT_TIME_TDLS_DEL_STA  (TDLS_DELETE_PEER_CMD_TIMEOUT + 1000)
+
+#define TDLS_DEFAULT_SERIALIZE_CMD_TIMEOUT (4000)
 
 /** Maximum time(ms) to wait for tdls add sta to complete **/
 #define WAIT_TIME_TDLS_ADD_STA  (TDLS_DEFAULT_SERIALIZE_CMD_TIMEOUT + 1000)
-
-/** Maximum time(ms) to wait for tdls del sta to complete **/
-#define WAIT_TIME_TDLS_DEL_STA  (TDLS_DEFAULT_SERIALIZE_CMD_TIMEOUT + 1000)
 
 /** Maximum time(ms) to wait for Link Establish Req to complete **/
 #define WAIT_TIME_TDLS_LINK_ESTABLISH_REQ      1500
@@ -451,11 +459,13 @@ enum tdls_feature_bit {
  * @tdls_pre_off_chan_num: tdls off channel number
  * @tdls_pre_off_chan_bw: tdls off channel bandwidth
  * @tdls_peer_kickout_threshold: sta kickout threshold for tdls peer
+ * @tdls_discovery_wake_timeout: tdls discovery wake timeout
  * @delayed_trig_framint: delayed trigger frame interval
  * @tdls_vdev_nss_2g: tdls NSS setting for 2G band
  * @tdls_vdev_nss_5g: tdls NSS setting for 5G band
  * @tdls_buffer_sta_enable: tdls buffer station enable
  * @tdls_off_chan_enable: tdls off channel enable
+ * @tdls_off_chan_enable_orig: original tdls off channel enable
  * @tdls_wmm_mode_enable: tdls wmm mode enable
  * @tdls_external_control: tdls external control enable
  * @tdls_implicit_trigger_enable: tdls implicit trigger enable
@@ -481,11 +491,13 @@ struct tdls_user_config {
 	uint32_t tdls_pre_off_chan_num;
 	uint32_t tdls_pre_off_chan_bw;
 	uint32_t tdls_peer_kickout_threshold;
+	uint32_t tdls_discovery_wake_timeout;
 	uint32_t delayed_trig_framint;
 	uint8_t tdls_vdev_nss_2g;
 	uint8_t tdls_vdev_nss_5g;
 	bool tdls_buffer_sta_enable;
 	bool tdls_off_chan_enable;
+	bool tdls_off_chan_enable_orig;
 	bool tdls_wmm_mode_enable;
 	bool tdls_external_control;
 	bool tdls_implicit_trigger_enable;
@@ -765,6 +777,7 @@ struct tdls_update_peer_params {
 	uint8_t supported_oper_classes_len;
 	uint8_t supported_oper_classes[WLAN_MAX_SUPP_OPER_CLASSES];
 	bool is_qos_wmm_sta;
+	bool is_pmf;
 };
 
 struct tdls_update_peer_request {
@@ -821,6 +834,7 @@ struct tdls_oper_config_force_peer_request {
  * @teardown_notification_ms: tdls teardown notification interval
  * @tdls_peer_kickout_threshold: tdls packets threshold
  *    for peer kickout operation
+ * @tdls_discovery_wake_timeout: tdls discovery wake timeout
  */
 struct tdls_info {
 	uint32_t vdev_id;
@@ -838,6 +852,7 @@ struct tdls_info {
 	uint32_t puapsd_rx_frame_threshold;
 	uint32_t teardown_notification_ms;
 	uint32_t tdls_peer_kickout_threshold;
+	uint32_t tdls_discovery_wake_timeout;
 };
 
 /**
@@ -917,7 +932,7 @@ struct tdls_peer_update_state {
 struct tdls_channel_switch_params {
 	uint32_t    vdev_id;
 	uint8_t     peer_mac_addr[QDF_MAC_ADDR_SIZE];
-	uint16_t    tdls_off_ch_bw_offset;
+	uint8_t    tdls_off_ch_bw_offset;
 	uint8_t     tdls_off_ch;
 	uint8_t     tdls_sw_mode;
 	uint8_t     oper_class;
@@ -1298,6 +1313,7 @@ struct tdls_add_sta_req {
 	struct vhtcap vht_cap;
 	uint8_t uapsd_queues;
 	uint8_t max_sp;
+	bool is_pmf;
 };
 
 /**

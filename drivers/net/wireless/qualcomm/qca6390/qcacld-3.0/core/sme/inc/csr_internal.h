@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -295,7 +295,7 @@ struct roam_cmd {
 	bool fStopWds;
 	tSirMacAddr peerMac;
 	tSirMacReasonCodes reason;
-	eCsrRoamDisconnectReason disconnect_reason;
+	tSirMacReasonCodes disconnect_reason;
 };
 
 struct setkey_cmd {
@@ -394,7 +394,7 @@ struct csr_config {
 	struct csr_sta_roam_policy_params sta_roam_policy;
 	bool enable_bcast_probe_rsp;
 	bool is_fils_enabled;
-	bool is_force_1x1;
+	enum force_1x1_type is_force_1x1;
 	uint8_t oce_feature_bitmap;
 	uint32_t offload_11k_enable_bitmask;
 	bool wep_tkip_in_he;
@@ -691,7 +691,7 @@ struct csr_roam_session {
 	bool nss_forced_1x1;
 	bool disable_hi_rssi;
 	bool dhcp_done;
-	uint8_t disconnect_reason;
+	tSirMacReasonCodes disconnect_reason;
 	uint8_t uapsd_mask;
 	struct scan_cmd_info scan_info;
 	qdf_mc_timer_t roaming_offload_timer;
@@ -1108,7 +1108,6 @@ static inline void csr_roaming_report_diag_event(
 {}
 #endif
 
-bool csr_find_session_by_bssid(struct mac_context *mac_ctx, uint8_t *bssid);
 QDF_STATUS csr_get_channels_and_power(struct mac_context *mac);
 
 bool csr_nonscan_active_ll_is_list_empty(

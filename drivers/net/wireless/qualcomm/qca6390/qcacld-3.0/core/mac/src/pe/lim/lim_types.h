@@ -113,6 +113,7 @@
 
 #define HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME 0x40      /* Bit 6 will be used to control BD rate for Management frames */
 #define HAL_USE_PEER_STA_REQUESTED_MASK   0x80  /* bit 7 will be used to control frames for p2p interface */
+#define HAL_USE_PMF   0x20
 
 #define LIM_DOS_PROTECTION_TIME 1000 //1000ms
 #define LIM_MIN_RSSI 0 /* 0dbm */
@@ -387,10 +388,64 @@ void lim_process_probe_req_frame_multiple_bss(struct mac_context *, uint8_t *,
 
 /* Process Auth frame when we have a session in progress. */
 void lim_process_auth_frame(struct mac_context *, uint8_t *, struct pe_session *);
-QDF_STATUS lim_process_auth_frame_no_session(struct mac_context *mac, uint8_t *,
-						void *body);
+
+/**
+ * lim_process_auth_frame_no_session() - Process auth frame received from AP to
+ * which we are not connected currently.
+ * @mac: Pointer to global mac context
+ * @bd: Pointer to rx auth frame
+ * @body: Pointer to lim_msg->body_ptr
+ *
+ * This is possibly the pre-auth from the neighbor AP, in the same mobility
+ * domain or pre-authentication reply for WPA3 SAE roaming.
+ * This will be used in case of 11r FT.
+ */
+QDF_STATUS lim_process_auth_frame_no_session(struct mac_context *mac,
+					     uint8_t *bd, void *body);
 
 void lim_process_assoc_req_frame(struct mac_context *, uint8_t *, uint8_t, struct pe_session *);
+
+/**
+ * lim_fill_lim_assoc_ind_params() - Initialize lim association indication
+ * @assoc_ind: PE association indication structure
+ * @mac_ctx: Pointer to Global MAC structure
+ * @sta_ds: station dph entry
+ * @session_entry: PE session entry
+ *
+ * Return: true if lim assoc ind filled successfully
+ */
+bool lim_fill_lim_assoc_ind_params(
+		tpLimMlmAssocInd assoc_ind,
+		struct mac_context *mac_ctx,
+		tpDphHashNode sta_ds,
+		struct pe_session *session_entry);
+
+/**
+ * lim_sae_auth_cleanup_retry() - API to cleanup sae auth frmae stored
+ * and deactivate the timer
+ * @mac_ctx: Pointer to mac context
+ * @vdev_id: vdev id
+ *
+ * Return: none
+ */
+void lim_sae_auth_cleanup_retry(struct mac_context *mac_ctx,
+				uint8_t vdev_id);
+
+/**
+ * lim_fill_sme_assoc_ind_params() - Initialize association indication
+ * @mac_ctx: Pointer to Global MAC structure
+ * @assoc_ind: PE association indication structure
+ * @sme_assoc_ind: SME association indication
+ * @session_entry: PE session entry
+ * @assoc_req_alloc: malloc memory for assoc_req or not
+ *
+ * Return: None
+ */
+void
+lim_fill_sme_assoc_ind_params(
+	struct mac_context *mac_ctx,
+	tpLimMlmAssocInd assoc_ind, struct assoc_ind *sme_assoc_ind,
+	struct pe_session *session_entry, bool assoc_req_alloc);
 void lim_send_mlm_assoc_ind(struct mac_context *mac, tpDphHashNode sta,
 			    struct pe_session *pe_session);
 
@@ -552,8 +607,27 @@ void lim_send_delts_req_action_frame(struct mac_context *mac, tSirMacAddr peer,
 void lim_send_addts_req_action_frame(struct mac_context *mac, tSirMacAddr peerMacAddr,
 				     tSirAddtsReqInfo *addts, struct pe_session *);
 
-void lim_send_assoc_rsp_mgmt_frame(struct mac_context *, uint16_t, uint16_t, tSirMacAddr,
-				   uint8_t, tpDphHashNode pSta, struct pe_session *);
+/**
+ * lim_send_assoc_rsp_mgmt_frame() - Send assoc response
+ * @mac_ctx: Handle for mac context
+ * @status_code: Status code for assoc response frame
+ * @aid: Association ID
+ * @peer_addr: Mac address of requesting peer
+ * @subtype: Assoc/Reassoc
+ * @sta: Pointer to station node
+ * @pe_session: PE session id.
+ * @tx_complete: Need tx complete callback or not
+ *
+ * Builds and sends association response frame to the requesting peer.
+ *
+ * Return: void
+ */
+void
+lim_send_assoc_rsp_mgmt_frame(
+	struct mac_context *mac_ctx,
+	uint16_t status_code, uint16_t aid, tSirMacAddr peer_addr,
+	uint8_t subtype, tpDphHashNode sta, struct pe_session *pe_session,
+	bool tx_complete);
 
 void lim_send_disassoc_mgmt_frame(struct mac_context *, uint16_t, tSirMacAddr,
 				  struct pe_session *, bool waitForAck);
@@ -580,8 +654,23 @@ QDF_STATUS lim_p2p_oper_chan_change_confirm_action_frame(
 QDF_STATUS lim_send_neighbor_report_request_frame(struct mac_context *,
 						     tpSirMacNeighborReportReq,
 						     tSirMacAddr, struct pe_session *);
-QDF_STATUS lim_send_link_report_action_frame(struct mac_context *, tpSirMacLinkReport,
-						tSirMacAddr, struct pe_session *);
+
+/**
+ * lim_send_link_report_action_frame() - Send link measurement report action
+ * frame in response for a link measurement request received.
+ * @mac: Pointer to Mac context
+ * @link_report: Pointer to the sSirMacLinkReport struct
+ * @peer: BSSID of the peer
+ * @pe_session: Pointer to the pe_session
+ *
+ * Return: QDF_STATUS
+ *
+ */
+QDF_STATUS
+lim_send_link_report_action_frame(struct mac_context *mac,
+				  tpSirMacLinkReport link_report,
+				  tSirMacAddr peer,
+				  struct pe_session *pe_session);
 
 /**
  * lim_send_radio_measure_report_action_frame - Send RRM report action frame
@@ -687,8 +776,21 @@ static inline void lim_update_tdls_set_state_for_fw(struct pe_session
 /* / Function that handles heartbeat failure */
 void lim_handle_heart_beat_failure(struct mac_context *, struct pe_session *);
 
-/* / Function that triggers link tear down with AP upon HB failure */
-void lim_tear_down_link_with_ap(struct mac_context *, uint8_t, tSirMacReasonCodes);
+/**
+ * lim_tear_down_link_with_ap() - Tear down link with AP
+ * @mac: mac context
+ * @session_id: PE session id
+ * @reason_code: Disconnect reason code as per emun eSirMacReasonCodes
+ * @trigger: Disconnect trigger as per enum eLimDisassocTrigger
+ *
+ * Function that triggers link tear down with AP upon HB failure
+ *
+ * Return: None
+ */
+void lim_tear_down_link_with_ap(struct mac_context *mac,
+				uint8_t session_id,
+				tSirMacReasonCodes reason_code,
+				enum eLimDisassocTrigger trigger);
 
 /* / Function that defers the messages received */
 uint32_t lim_defer_msg(struct mac_context *, struct scheduler_msg *);
@@ -739,7 +841,14 @@ void lim_process_mlm_set_bss_key_rsp(struct mac_context *mac,
 /* Function to process WMA_SWITCH_CHANNEL_RSP message */
 void lim_process_switch_channel_rsp(struct mac_context *mac, void *);
 
-QDF_STATUS lim_sta_send_down_link(join_params *param);
+/**
+ * lim_sta_handle_connect_fail() - handle connect failure of STA
+ * @param - join params
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS lim_sta_handle_connect_fail(join_params *param);
+
 QDF_STATUS lim_sta_reassoc_error_handler(struct reassoc_params *param);
 
 #ifdef WLAN_FEATURE_11W
@@ -996,11 +1105,42 @@ typedef enum sHalBitVal         /* For Bit operations */
 	eHAL_SET
 } tHalBitVal;
 
+/**
+ * lim_send_addba_response_frame(): Send ADDBA response action frame to peer
+ * @mac_ctx: mac context
+ * @peer_mac: Peer MAC address
+ * @tid: TID for which addba response is being sent
+ * @session: PE session entry
+ * @addba_extn_present: ADDBA extension present flag
+ * @amsdu_support: amsdu in ampdu support
+ * @is_wep: protected bit in fc
+ *
+ * This function is called when ADDBA request is successful. ADDBA response is
+ * setup by calling addba_response_setup API and frame is then sent out OTA.
+ *
+ * Return: QDF_STATUS
+ */
 QDF_STATUS lim_send_addba_response_frame(struct mac_context *mac_ctx,
 					 tSirMacAddr peer_mac, uint16_t tid,
 					 struct pe_session *session,
 					 uint8_t addba_extn_present,
-					 uint8_t amsdu_support);
+					 uint8_t amsdu_support, uint8_t is_wep);
+
+/**
+ * lim_send_delba_action_frame() - Send delba to peer
+ * @mac_ctx: mac context
+ * @vdev_id: vdev id
+ * @peer_macaddr: Peer mac addr
+ * @tid: Tid number
+ * @reason_code: reason code
+ *
+ * Return: 0 for success, non-zero for failure
+ */
+QDF_STATUS lim_send_delba_action_frame(struct mac_context *mac_ctx,
+				       uint8_t vdev_id,
+				       uint8_t *peer_macaddr, uint8_t tid,
+				       uint8_t reason_code);
+
 /**
  * lim_process_join_failure_timeout() - This function is called to process
  * JoinFailureTimeout
@@ -1038,6 +1178,18 @@ void lim_process_auth_failure_timeout(struct mac_context *mac_ctx);
  */
 void lim_process_assoc_failure_timeout(struct mac_context *mac_ctx,
 				       uint32_t msg_type);
+
+/**
+ * lim_send_frame() - API to send frame
+ * @mac_ctx Pointer to Global MAC structure
+ * @vdev_id: vdev id
+ * @buf: Pointer to SAE auth retry frame
+ * @buf_len: length of frame
+ *
+ * Return: None
+ */
+void lim_send_frame(struct mac_context *mac_ctx, uint8_t vdev_id, uint8_t *buf,
+		    uint16_t buf_len);
 
 /**
  * lim_send_mgmt_frame_tx() - Sends mgmt frame

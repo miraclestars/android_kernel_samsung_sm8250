@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -27,8 +27,6 @@
 
 /* Include files */
 #include <wmi_unified_api.h>
-
-#define POLICY_MGR_MAX_CHANNEL_LIST 128
 
 /**
  *  Some max value greater than the max length of the channel list
@@ -132,6 +130,18 @@ enum hw_mode_mac_band_cap {
 	HW_MODE_MAC_BAND_NONE = 0,
 	HW_MODE_MAC_BAND_2G = WLAN_2G_CAPABILITY,
 	HW_MODE_MAC_BAND_5G = WLAN_5G_CAPABILITY,
+};
+
+/**
+ * enum force_1x1_type - enum to specify the type of forced 1x1 ini provided.
+ * @FORCE_1X1_DISABLED: even if the AP is present in OUI, 1x1 will not be forced
+ * @FORCE_1X1_ENABLED_FOR_AS: If antenna sharing supported, then only do 1x1.
+ * @FORCE_1X1_ENABLED_FORCED: If AP present in OUI, force 1x1 connection.
+ */
+enum force_1x1_type {
+	FORCE_1X1_DISABLED,
+	FORCE_1X1_ENABLED_FOR_AS,
+	FORCE_1X1_ENABLED_FORCED,
 };
 
 /**
@@ -787,8 +797,9 @@ enum policy_mgr_band {
  * @POLICY_MGR_UPDATE_REASON_HIDDEN_STA: Connection to Hidden STA
  * @POLICY_MGR_UPDATE_REASON_OPPORTUNISTIC: Opportunistic HW mode update
  * @POLICY_MGR_UPDATE_REASON_NSS_UPDATE: NSS update
- * @POLICY_MGR_UPDATE_REASON_CHANNEL_SWITCH: Channel switch
- * @POLICY_MGR_UPDATE_REASON_CHANNEL_SWITCH_STA: Channel switch for STA
+ * @POLICY_MGR_UPDATE_REASON_AFTER_CHANNEL_SWITCH: After Channel switch
+ * @POLICY_MGR_UPDATE_REASON_CHANNEL_SWITCH_STA: Before Channel switch for STA
+ * @POLICY_MGR_UPDATE_REASON_CHANNEL_SWITCH_SAP: Before Channel switch for SAP
  * @POLICY_MGR_UPDATE_REASON_PRI_VDEV_CHANGE: In Dual DBS HW, if the vdev based
  *        2x2 preference enabled, the vdev down may cause prioritized active
  *        vdev change, then DBS hw mode may needs to change from one DBS mode
@@ -805,8 +816,9 @@ enum policy_mgr_conn_update_reason {
 	POLICY_MGR_UPDATE_REASON_HIDDEN_STA,
 	POLICY_MGR_UPDATE_REASON_OPPORTUNISTIC,
 	POLICY_MGR_UPDATE_REASON_NSS_UPDATE,
-	POLICY_MGR_UPDATE_REASON_CHANNEL_SWITCH,
+	POLICY_MGR_UPDATE_REASON_AFTER_CHANNEL_SWITCH,
 	POLICY_MGR_UPDATE_REASON_CHANNEL_SWITCH_STA,
+	POLICY_MGR_UPDATE_REASON_CHANNEL_SWITCH_SAP,
 	POLICY_MGR_UPDATE_REASON_PRE_CAC,
 	POLICY_MGR_UPDATE_REASON_PRI_VDEV_CHANGE,
 	POLICY_MGR_UPDATE_REASON_NAN_DISCOVERY,
@@ -850,6 +862,7 @@ enum hw_mode_bandwidth {
  * @SET_HW_MODE_STATUS_EHARDWARE: HW mode change prevented by hardware
  * @SET_HW_MODE_STATUS_EPENDING: HW mode change is pending
  * @SET_HW_MODE_STATUS_ECOEX: HW mode change conflict with Coex
+ * @SET_HW_MODE_STATUS_ALREADY: Requested hw mode is already applied to FW.
  */
 enum set_hw_mode_status {
 	SET_HW_MODE_STATUS_OK,
@@ -859,6 +872,7 @@ enum set_hw_mode_status {
 	SET_HW_MODE_STATUS_EHARDWARE,
 	SET_HW_MODE_STATUS_EPENDING,
 	SET_HW_MODE_STATUS_ECOEX,
+	SET_HW_MODE_STATUS_ALREADY,
 };
 
 typedef void (*dual_mac_cb)(enum set_hw_mode_status status,
@@ -990,6 +1004,7 @@ struct policy_mgr_dual_mac_config {
  * @reason: Reason for HW mode change
  * @session_id: Session id
  * @next_action: next action to happen at policy mgr
+ * @action: current hw change action to be done
  * @context: psoc context
  */
 struct policy_mgr_hw_mode {
@@ -998,6 +1013,7 @@ struct policy_mgr_hw_mode {
 	enum policy_mgr_conn_update_reason reason;
 	uint32_t session_id;
 	uint8_t next_action;
+	enum policy_mgr_conc_next_action action;
 	struct wlan_objmgr_psoc *context;
 };
 
@@ -1008,8 +1024,8 @@ struct policy_mgr_hw_mode {
  * @pcl_len: Number of channels in the PCL
  */
 struct policy_mgr_pcl_list {
-	uint8_t pcl_list[POLICY_MGR_MAX_CHANNEL_LIST];
-	uint8_t weight_list[POLICY_MGR_MAX_CHANNEL_LIST];
+	uint8_t pcl_list[NUM_CHANNELS];
+	uint8_t weight_list[NUM_CHANNELS];
 	uint32_t pcl_len;
 };
 
@@ -1026,12 +1042,12 @@ struct policy_mgr_pcl_list {
  * @weight_list: Weights assigned by policy manager
  */
 struct policy_mgr_pcl_chan_weights {
-	uint8_t pcl_list[POLICY_MGR_MAX_CHANNEL_LIST];
+	uint8_t pcl_list[NUM_CHANNELS];
 	uint32_t pcl_len;
-	uint8_t saved_chan_list[POLICY_MGR_MAX_CHANNEL_LIST];
+	uint8_t saved_chan_list[NUM_CHANNELS];
 	uint32_t saved_num_chan;
-	uint8_t weighed_valid_list[POLICY_MGR_MAX_CHANNEL_LIST];
-	uint8_t weight_list[POLICY_MGR_MAX_CHANNEL_LIST];
+	uint8_t weighed_valid_list[NUM_CHANNELS];
+	uint8_t weight_list[NUM_CHANNELS];
 };
 
 /**
@@ -1112,10 +1128,12 @@ struct policy_mgr_user_cfg {
  * struct dbs_nss - Number of spatial streams in DBS mode
  * @mac0_ss: Number of spatial streams on MAC0
  * @mac1_ss: Number of spatial streams on MAC1
+ * @single_mac0_band_cap: Mac0 band capability for single mac hw mode
  */
 struct dbs_nss {
 	enum hw_mode_ss_config mac0_ss;
 	enum hw_mode_ss_config mac1_ss;
+	uint32_t single_mac0_band_cap;
 };
 
 /**

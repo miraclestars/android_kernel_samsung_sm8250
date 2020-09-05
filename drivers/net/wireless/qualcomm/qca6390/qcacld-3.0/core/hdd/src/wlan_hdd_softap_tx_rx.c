@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -699,6 +699,11 @@ static void __hdd_softap_tx_timeout(struct net_device *dev)
 		return;
 	}
 
+	if (hdd_ctx->hdd_wlan_suspended) {
+		hdd_debug("wlan is suspended, ignore timeout");
+		return;
+	}
+
 	TX_TIMEOUT_TRACE(dev, QDF_MODULE_ID_HDD_SAP_DATA);
 
 	for (i = 0; i < NUM_TX_QUEUES; i++) {
@@ -725,6 +730,7 @@ static void __hdd_softap_tx_timeout(struct net_device *dev)
 		adapter->hdd_stats.tx_rx_stats.cont_txtimeout_cnt = 0;
 		if (cdp_cfg_get(soc, cfg_dp_enable_data_stall))
 			cdp_post_data_stall_event(soc,
+					  cds_get_context(QDF_MODULE_ID_TXRX),
 					  DATA_STALL_LOG_INDICATOR_HOST_DRIVER,
 					  DATA_STALL_LOG_HOST_SOFTAP_TX_TIMEOUT,
 					  0xFF, 0xFF,
@@ -897,6 +903,7 @@ QDF_STATUS hdd_softap_rx_packet_cbk(void *adapter_context, qdf_nbuf_t rx_buf)
 			QDF_TRACE(QDF_MODULE_ID_HDD_SAP_DATA,
 				  QDF_TRACE_LEVEL_ERROR,
 				  "%s: ERROR!!Invalid netdevice", __func__);
+			qdf_nbuf_free(skb);
 			continue;
 		}
 		cpu_index = wlan_hdd_get_cpu();
@@ -952,10 +959,15 @@ QDF_STATUS hdd_softap_rx_packet_cbk(void *adapter_context, qdf_nbuf_t rx_buf)
 
 		qdf_status = hdd_rx_deliver_to_stack(adapter, skb);
 
-		if (QDF_IS_STATUS_SUCCESS(qdf_status))
+		if (QDF_IS_STATUS_SUCCESS(qdf_status)) {
 			++adapter->hdd_stats.tx_rx_stats.rx_delivered[cpu_index];
-		else
+		} else {
 			++adapter->hdd_stats.tx_rx_stats.rx_refused[cpu_index];
+			DPTRACE(qdf_dp_log_proto_pkt_info(NULL, NULL, 0, 0,
+						      QDF_RX,
+						      QDF_TRACE_DEFAULT_MSDU_ID,
+						      QDF_TX_RX_STATUS_DROP));
+		}
 	}
 
 	return QDF_STATUS_SUCCESS;
@@ -992,8 +1004,8 @@ QDF_STATUS hdd_softap_deregister_sta(struct hdd_adapter *adapter,
 			(struct cdp_pdev *)cds_get_context(QDF_MODULE_ID_TXRX),
 			sta_id);
 	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
-		hdd_err("cdp_clear_peer failed for staID %d, Status=%d [0x%08X]",
-			sta_id, qdf_status, qdf_status);
+		hdd_debug("cdp_clear_peer failed for staID %d, Status=%d [0x%08X]",
+			  sta_id, qdf_status, qdf_status);
 	}
 
 	if (adapter->sta_info[sta_id].in_use) {
@@ -1005,13 +1017,15 @@ QDF_STATUS hdd_softap_deregister_sta(struct hdd_adapter *adapter,
 					  WLAN_IPA_CLIENT_DISCONNECT,
 					  adapter->sta_info[sta_id].sta_mac.
 					  bytes) != QDF_STATUS_SUCCESS)
-				hdd_err("WLAN_CLIENT_DISCONNECT event failed");
+				hdd_debug("WLAN_CLIENT_DISCONNECT event failed");
 		}
 		spin_lock_bh(&adapter->sta_info_lock);
 		qdf_mem_zero(&adapter->sta_info[sta_id],
 			     sizeof(struct hdd_station_info));
 		spin_unlock_bh(&adapter->sta_info_lock);
 	}
+
+	hdd_softap_deinit_tx_rx_sta(adapter, sta_id);
 
 	hdd_ctx->sta_to_adapter[sta_id] = NULL;
 	ucfg_mlme_update_oce_flags(hdd_ctx->pdev);
@@ -1046,7 +1060,7 @@ QDF_STATUS hdd_softap_register_sta(struct hdd_adapter *adapter,
 	 * Clean up old entry if it is not cleaned up properly
 	 */
 	if (adapter->sta_info[sta_id].in_use) {
-		hdd_info("clean up old entry for STA %d", sta_id);
+		hdd_debug("clean up old entry for STA %d", sta_id);
 		hdd_softap_deregister_sta(adapter, sta_id);
 	}
 
@@ -1068,10 +1082,12 @@ QDF_STATUS hdd_softap_register_sta(struct hdd_adapter *adapter,
 	if (adapter->hdd_ctx->enable_dp_rx_threads) {
 		txrx_ops.rx.rx = hdd_rx_pkt_thread_enqueue_cbk;
 		txrx_ops.rx.rx_stack = hdd_softap_rx_packet_cbk;
+		txrx_ops.rx.rx_flush = hdd_rx_flush_packet_cbk;
 		txrx_ops.rx.rx_gro_flush = hdd_rx_thread_gro_flush_ind_cbk;
 	} else {
 		txrx_ops.rx.rx = hdd_softap_rx_packet_cbk;
 		txrx_ops.rx.rx_stack = NULL;
+		txrx_ops.rx.rx_flush = NULL;
 	}
 
 	txrx_vdev = cdp_get_vdev_from_vdev_id(soc,
@@ -1093,8 +1109,8 @@ QDF_STATUS hdd_softap_register_sta(struct hdd_adapter *adapter,
 	qdf_status = cdp_peer_register(soc,
 			(struct cdp_pdev *)pdev, &txrx_desc);
 	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
-		hdd_err("cdp_peer_register() failed to register.  Status = %d [0x%08X]",
-			qdf_status, qdf_status);
+		hdd_debug("cdp_peer_register() failed to register.  Status = %d [0x%08X]",
+			  qdf_status, qdf_status);
 		return qdf_status;
 	}
 
@@ -1108,7 +1124,7 @@ QDF_STATUS hdd_softap_register_sta(struct hdd_adapter *adapter,
 	adapter->sta_info[sta_id].is_qos_enabled = wmm_enabled;
 
 	if (!auth_required) {
-		hdd_info("open/shared auth StaId= %d.  Changing TL state to AUTHENTICATED at Join time",
+		hdd_debug("open/shared auth StaId= %d.  Changing TL state to AUTHENTICATED at Join time",
 			 adapter->sta_info[sta_id].sta_id);
 
 		/* Connections that do not need Upper layer auth,
@@ -1124,7 +1140,7 @@ QDF_STATUS hdd_softap_register_sta(struct hdd_adapter *adapter,
 							sta_mac);
 	} else {
 
-		hdd_info("ULA auth StaId= %d.  Changing TL state to CONNECTED at Join time",
+		hdd_debug("ULA auth StaId= %d.  Changing TL state to CONNECTED at Join time",
 			 adapter->sta_info[sta_id].sta_id);
 
 		qdf_status = hdd_change_peer_state(adapter, txrx_desc.sta_id,
@@ -1207,8 +1223,8 @@ QDF_STATUS hdd_softap_stop_bss(struct hdd_adapter *adapter)
 	status = hdd_softap_deregister_bc_sta(adapter);
 
 	if (!QDF_IS_STATUS_SUCCESS(status))
-		hdd_err("Failed to deregister BC sta Id %d",
-			ap_ctx->broadcast_sta_id);
+		hdd_debug("Failed to deregister BC sta Id %d",
+			  ap_ctx->broadcast_sta_id);
 
 	for (sta_id = 0; sta_id < WLAN_MAX_STA_COUNT; sta_id++) {
 		/* This excludes BC sta as it is already deregistered */
@@ -1256,7 +1272,7 @@ QDF_STATUS hdd_softap_change_sta_state(struct hdd_adapter *adapter,
 
 	qdf_status = hdd_softap_get_sta_id(adapter, sta_mac, &sta_id);
 	if (QDF_STATUS_SUCCESS != qdf_status) {
-		hdd_err("Failed to find right station");
+		hdd_debug("Failed to find right station");
 		return qdf_status;
 	}
 
@@ -1269,7 +1285,7 @@ QDF_STATUS hdd_softap_change_sta_state(struct hdd_adapter *adapter,
 
 	qdf_status =
 		hdd_change_peer_state(adapter, sta_id, state, false);
-	hdd_info("Station %u changed to state %d", sta_id, state);
+	hdd_debug("Station %u changed to state %d", sta_id, state);
 
 	if (QDF_STATUS_SUCCESS == qdf_status) {
 		adapter->sta_info[sta_id].peer_state =

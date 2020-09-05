@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -110,53 +110,39 @@ static void lim_extract_he_op(struct pe_session *session,
 	}
 }
 
-static bool lim_check_he_80_mcs11_supp(struct pe_session *session,
-		tSirProbeRespBeacon *beacon_struct) {
-	uint8_t rx_mcs_map;
-	uint8_t tx_mcs_map;
-	rx_mcs_map = beacon_struct->he_cap.rx_he_mcs_map_lt_80;
-	tx_mcs_map = beacon_struct->he_cap.tx_he_mcs_map_lt_80;
-	if ((session->nss == NSS_1x1_MODE) &&
-		((HE_GET_MCS_4_NSS(rx_mcs_map, 1) == HE_MCS_0_11) ||
-		(HE_GET_MCS_4_NSS(tx_mcs_map, 1) == HE_MCS_0_11)))
-		return true;
-
-	if ((session->nss == NSS_2x2_MODE) &&
-		((HE_GET_MCS_4_NSS(rx_mcs_map, 2) == HE_MCS_0_11) ||
-		(HE_GET_MCS_4_NSS(tx_mcs_map, 2) == HE_MCS_0_11)))
-		return true;
-
-	return false;
-}
-
-static void lim_check_he_ldpc_cap(struct pe_session *session,
-		tSirProbeRespBeacon *beacon_struct)
+static void lim_check_is_he_mcs_valid(struct pe_session *session,
+				      tSirProbeRespBeacon *beacon_struct)
 {
-	if (session->he_capable && beacon_struct->he_cap.present) {
-		if (beacon_struct->he_cap.ldpc_coding)
+	uint8_t i;
+	uint16_t mcs_map;
+
+	if (!session->he_capable || !beacon_struct->he_cap.present)
+		return;
+
+	mcs_map = beacon_struct->he_cap.rx_he_mcs_map_lt_80;
+	for (i = 0; i < session->nss; i++) {
+		if (((mcs_map >> (i * 2)) & 0x3) != 0x3)
 			return;
-		else if ((session->ch_width == CH_WIDTH_20MHZ) &&
-				!lim_check_he_80_mcs11_supp(session,
-					beacon_struct))
-			return;
-		session->he_capable = false;
-		pe_err("LDPC check failed for HE operation");
-		if (session->vhtCapability) {
-			session->dot11mode = MLME_DOT11_MODE_11AC;
-			pe_debug("Update dot11mode to 11ac");
-		} else {
-			session->dot11mode = MLME_DOT11_MODE_11N;
-			pe_debug("Update dot11mode to 11N");
-		}
+	}
+	session->he_capable = false;
+	pe_err("AP does not have valid MCS map");
+	if (session->vhtCapability) {
+		session->dot11mode = MLME_DOT11_MODE_11AC;
+		pe_debug("Update dot11mode to 11ac");
+	} else {
+		session->dot11mode = MLME_DOT11_MODE_11N;
+		pe_debug("Update dot11mode to 11N");
 	}
 }
+
 #else
 static inline void lim_extract_he_op(struct pe_session *session,
 		tSirProbeRespBeacon *beacon_struct)
 {}
-static void lim_check_he_ldpc_cap(struct pe_session *session,
-		tSirProbeRespBeacon *beacon_struct)
-{}
+static void lim_check_is_he_mcs_valid(struct pe_session *session,
+				      tSirProbeRespBeacon *beacon_struct)
+{
+}
 #endif
 
 void lim_objmgr_update_vdev_nss(struct wlan_objmgr_psoc *psoc,
@@ -256,11 +242,6 @@ lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 	else
 		mac_ctx->lim.htCapabilityPresentInBeacon = 0;
 
-	pe_debug("Bcon: VHTCap.present: %d SU Beamformer: %d BSS_VHT_CAPABLE: %d",
-		beacon_struct->VHTCaps.present,
-		beacon_struct->VHTCaps.suBeamFormerCap,
-		IS_BSS_VHT_CAPABLE(beacon_struct->VHTCaps));
-
 	vht_op = &beacon_struct->VHTOperation;
 	if (IS_BSS_VHT_CAPABLE(beacon_struct->VHTCaps) &&
 			vht_op->present &&
@@ -302,6 +283,9 @@ lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 			else if (center_freq_diff > 16)
 				ap_bcon_ch_width =
 					WNI_CFG_VHT_CHANNEL_WIDTH_80_PLUS_80MHZ;
+			else
+				ap_bcon_ch_width =
+					WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ;
 		}
 
 		fw_vht_ch_wd = wma_get_vht_ch_width();
@@ -354,24 +338,17 @@ lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 				 */
 				vht_ch_wd = WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ;
 				session->ch_center_freq_seg1 = 0;
-			}
-		} else if (vht_ch_wd == WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ) {
-			/* DUT or AP supports only 80MHz */
-			if (ap_bcon_ch_width ==
-					WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ &&
-					!new_ch_width_dfn)
-				/* AP is in 160MHz mode */
 				session->ch_center_freq_seg0 =
 					lim_get_80Mhz_center_channel(
 						beacon_struct->channelNumber);
-			else
-				session->ch_center_freq_seg1 = 0;
+			}
+		} else if (vht_ch_wd == WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ) {
+			session->ch_center_freq_seg0 =
+					lim_get_80Mhz_center_channel(
+						beacon_struct->channelNumber);
+			session->ch_center_freq_seg1 = 0;
 		}
 		session->ch_width = vht_ch_wd + 1;
-		pe_debug("cntr_freq0: %d cntr_freq1: %d width: %d",
-				session->ch_center_freq_seg0,
-				session->ch_center_freq_seg1,
-				session->ch_width);
 		if (CH_WIDTH_80MHZ < session->ch_width) {
 			session->vht_config.su_beam_former = 0;
 			session->nss = 1;
@@ -391,11 +368,12 @@ lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 			else
 				session->gLimOperatingMode.chanWidth =
 					CH_WIDTH_160MHZ;
+			session->gLimOperatingMode.rxNSS = session->nss - 1;
 		} else {
 			pe_err("AP does not support op_mode rx");
 		}
 	}
-	lim_check_he_ldpc_cap(session, beacon_struct);
+	lim_check_is_he_mcs_valid(session, beacon_struct);
 	lim_extract_he_op(session, beacon_struct);
 	/* Extract the UAPSD flag from WMM Parameter element */
 	if (beacon_struct->wmeEdcaPresent)

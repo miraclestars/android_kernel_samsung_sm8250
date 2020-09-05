@@ -875,16 +875,12 @@ static void __sch_beacon_process_for_session(struct mac_context *mac_ctx,
 
 	if (mac_ctx->mlme_cfg->sta.allow_tpc_from_ap) {
 		get_local_power_constraint_beacon(bcn, &local_constraint);
-		pe_debug("ESE localPowerConstraint = %d,",
-				local_constraint);
 
 		if (mac_ctx->rrm.rrmPEContext.rrmEnable &&
 				bcn->powerConstraintPresent) {
 			local_constraint = regMax;
 			local_constraint -=
 				bcn->localPowerConstraint.localPowerConstraints;
-			pe_debug("localPowerConstraint = %d,",
-				local_constraint);
 			}
 	}
 
@@ -897,14 +893,11 @@ static void __sch_beacon_process_for_session(struct mac_context *mac_ctx,
 
 	maxTxPower = lim_get_max_tx_power(mac_ctx, &tx_pwr_attr);
 
-	pe_debug("RegMax = %d, MaxTx pwr = %d",
-			regMax, maxTxPower);
-
 	/* If maxTxPower is increased or decreased */
 	if (maxTxPower != session->maxTxPower) {
-		pe_debug(
-			FL("Local power constraint change, Updating new maxTx power %d from old pwr %d"),
-			maxTxPower, session->maxTxPower);
+		pe_debug("Local power constraint change, Updating new maxTx power %d from old pwr %d (regMax %d local %d)",
+			 maxTxPower, session->maxTxPower, regMax,
+			 local_constraint);
 		if (lim_send_set_max_tx_power_req(mac_ctx, maxTxPower, session)
 		    == QDF_STATUS_SUCCESS)
 			session->maxTxPower = maxTxPower;
@@ -929,10 +922,8 @@ static void __sch_beacon_process_for_session(struct mac_context *mac_ctx,
 
 	if ((false == mac_ctx->sap.SapDfsInfo.is_dfs_cac_timer_running)
 	    && beaconParams.paramChangeBitmap) {
-		pe_debug("Beacon for session[%d] got changed.",
-			 session->peSessionId);
-		pe_debug("sending beacon param change bitmap: 0x%x",
-			 beaconParams.paramChangeBitmap);
+		pe_debug("Beacon for session[%d] got changed param change bitmap: 0x%x",
+			 session->peSessionId, beaconParams.paramChangeBitmap);
 		lim_send_beacon_params(mac_ctx, &beaconParams, session);
 	}
 
@@ -1129,6 +1120,8 @@ void sch_send_beacon_report(struct mac_context *mac_ctx,
 				qdf_do_div(qdf_get_monotonic_boottime(),
 					   QDF_MC_TIMER_TO_MS_UNIT);
 
+		beacon_report.vdev_id = session->vdev_id;
+
 		/* Send report to upper layer */
 		mac_ctx->lim.sme_bcn_rcv_callback(mac_ctx->hdd_handle,
 						  &beacon_report);
@@ -1193,6 +1186,7 @@ sch_beacon_edca_process(struct mac_context *mac, tSirMacEdcaParamSetIE *edca,
 			struct pe_session *session)
 {
 	uint8_t i;
+	bool follow_ap_edca;
 #ifdef FEATURE_WLAN_DIAG_SUPPORT
 	host_log_qos_edca_pkt_type *log_ptr = NULL;
 #endif /* FEATURE_WLAN_DIAG_SUPPORT */
@@ -1202,8 +1196,7 @@ sch_beacon_edca_process(struct mac_context *mac, tSirMacEdcaParamSetIE *edca,
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	pe_debug("Updating parameter set count: Old %d ---> new %d",
-		session->gLimEdcaParamSetCount, edca->qosInfo.count);
+	follow_ap_edca = mlme_get_follow_ap_edca_flag(session->vdev);
 
 	session->gLimEdcaParamSetCount = edca->qosInfo.count;
 	session->gLimEdcaParams[QCA_WLAN_AC_BE] = edca->acbe;
@@ -1211,7 +1204,7 @@ sch_beacon_edca_process(struct mac_context *mac, tSirMacEdcaParamSetIE *edca,
 	session->gLimEdcaParams[QCA_WLAN_AC_VI] = edca->acvi;
 	session->gLimEdcaParams[QCA_WLAN_AC_VO] = edca->acvo;
 
-	if (mac->mlme_cfg->edca_params.enable_edca_params) {
+	if (mac->mlme_cfg->edca_params.enable_edca_params && !follow_ap_edca) {
 		session->gLimEdcaParams[QCA_WLAN_AC_VO].aci.aifsn =
 			mac->mlme_cfg->edca_params.edca_ac_vo.vo_aifs;
 		session->gLimEdcaParams[QCA_WLAN_AC_VI].aci.aifsn =
@@ -1273,15 +1266,15 @@ sch_beacon_edca_process(struct mac_context *mac, tSirMacEdcaParamSetIE *edca,
 	}
 	WLAN_HOST_DIAG_LOG_REPORT(log_ptr);
 #endif /* FEATURE_WLAN_DIAG_SUPPORT */
-	pe_debug("Edca param enabled in ini %d. Updating Local EDCA Params(gLimEdcaParams) to: ",
+	pe_debug("Edca param enabled %d. Updating Local Params to: ",
 		 mac->mlme_cfg->edca_params.enable_edca_params);
 	for (i = 0; i < QCA_WLAN_AC_ALL; i++) {
-		pe_debug("AC[%d]:  AIFSN: %d, ACM %d, CWmin %d, CWmax %d, TxOp %d",
-		       i, session->gLimEdcaParams[i].aci.aifsn,
-		       session->gLimEdcaParams[i].aci.acm,
-		       session->gLimEdcaParams[i].cw.min,
-		       session->gLimEdcaParams[i].cw.max,
-		       session->gLimEdcaParams[i].txoplimit);
+		pe_nofl_debug("AC[%d]:  AIFSN: %d, ACM %d, CWmin %d, CWmax %d, TxOp %d",
+			      i, session->gLimEdcaParams[i].aci.aifsn,
+			      session->gLimEdcaParams[i].aci.acm,
+			      session->gLimEdcaParams[i].cw.min,
+			      session->gLimEdcaParams[i].cw.max,
+			      session->gLimEdcaParams[i].txoplimit);
 	}
 	return QDF_STATUS_SUCCESS;
 }

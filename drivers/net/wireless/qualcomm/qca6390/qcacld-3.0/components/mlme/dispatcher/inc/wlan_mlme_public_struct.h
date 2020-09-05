@@ -41,6 +41,14 @@
 #define CFG_VHT_TX_MCS_MAP_STAMAX    0xFFFF
 #define CFG_VHT_TX_MCS_MAP_STADEF    0xFFFE
 
+/* Roam debugging related macro defines */
+#define MAX_ROAM_DEBUG_BUF_SIZE    250
+#define MAX_ROAM_EVENTS_SUPPORTED  5
+#define ROAM_FAILURE_BUF_SIZE      50
+#define TIME_STRING_LEN            24
+
+#define ROAM_CHANNEL_BUF_SIZE      300
+#define LINE_STR "========================================="
 /*
  * MLME_CFG_VHT_CSN_BEAMFORMEE_ANT_SUPPORTED_FW_DEF + 1 is
  * assumed to be the default fw supported BF antennas, if fw
@@ -59,7 +67,11 @@
 #define CFG_MAX_STR_LEN       256
 #define MAX_VENDOR_IES_LEN 1532
 
+#define CFG_MAX_PMK_LEN       64
+
 #define CFG_VALID_CHANNEL_LIST_STRING_LEN (CFG_VALID_CHANNEL_LIST_LEN * 4)
+
+#define DEFAULT_ROAM_TRIGGER_BITMAP 0xFFFFFFFF
 /**
  * struct mlme_cfg_str - generic structure for all mlme CFG string items
  *
@@ -259,6 +271,44 @@ enum mlme_ts_info_ack_policy {
 	TS_INFO_ACK_POLICY_HT_IMMEDIATE_BLOCK_ACK = 1,
 };
 
+#if defined(WLAN_FEATURE_HOST_ROAM) || defined(WLAN_FEATURE_ROAM_OFFLOAD)
+/**
+ * enum roam_control_requestor - Driver disabled roaming requestor that will
+ *  request the roam module to disable roaming based on the mlme operation
+ * @RSO_INVALID_REQUESTOR: invalid requestor
+ * @RSO_START_BSS: disable roaming temporarily due to start bss
+ * @RSO_CHANNEL_SWITCH: disable roaming due to STA channel switch
+ * @RSO_CONNECT_START: disable roaming temporarily due to connect
+ * @RSO_SAP_CHANNEL_CHANGE: disable roaming due to SAP channel change
+ * @RSO_NDP_CON_ON_NDI: disable roaming due to NDP connection on NDI
+ */
+enum roam_control_requestor {
+	RSO_INVALID_REQUESTOR,
+	RSO_START_BSS          = BIT(0),
+	RSO_CHANNEL_SWITCH     = BIT(1),
+	RSO_CONNECT_START      = BIT(2),
+	RSO_SAP_CHANNEL_CHANGE = BIT(3),
+	RSO_NDP_CON_ON_NDI     = BIT(4),
+};
+
+/**
+ * enum roam_offload_state - Roaming module state for each STA vdev.
+ * @ROAM_DEINIT: Roaming module is not initialized at the
+ *  firmware.
+ * @ROAM_INIT: Roaming module initialized at the firmware.
+ * @ROAM_RSO_STARTED: RSO started, firmware can roam to different AP.
+ * @ROAM_RSO_STOPPED: RSO stopped - roaming module is initialized at firmware,
+ *  but firmware cannot do roaming due to supplicant disabled roaming/driver
+ * disabled roaming.
+ */
+enum roam_offload_state {
+	ROAM_DEINIT,
+	ROAM_INIT,
+	ROAM_RSO_STARTED,
+	ROAM_RSO_STOPPED
+};
+#endif
+
 /**
  * struct mlme_edca_params - EDCA pramaters related config items
  *
@@ -335,6 +385,9 @@ struct wlan_mlme_edca_params {
 
 #define MLME_NUM_WLM_LATENCY_LEVEL 4
 #define MLME_RMENABLEDCAP_MAX_LEN  5
+
+#define LFR3_STA_ROAM_DISABLE_BY_P2P BIT(0)
+#define LFR3_STA_ROAM_DISABLE_BY_NAN BIT(1)
 
 /**
  * struct mlme_ht_capabilities_info - HT Capabilities Info
@@ -756,6 +809,7 @@ struct wlan_mlme_powersave {
  * @tx_bf_cap: Transmit bf capability
  * @as_cap: Antenna sharing capability info
  * @disable_ldpc_with_txbf_ap: Disable ldpc capability
+ * @vht_mcs_10_11_supp: VHT MCS 10 & 11 support
  */
 struct mlme_vht_capabilities_info {
 	uint8_t supp_chan_width;
@@ -799,6 +853,7 @@ struct mlme_vht_capabilities_info {
 	uint8_t tx_bf_cap;
 	uint8_t as_cap;
 	bool disable_ldpc_with_txbf_ap;
+	bool vht_mcs_10_11_supp;
 };
 
 /**
@@ -1064,6 +1119,11 @@ struct wlan_mlme_chainmask {
  * @data_stall_recovery_fw_support: whether FW supports Data stall recovery.
  * @enable_change_channel_bandwidth: enable/disable change channel bw in mission
  * mode
+ * @as_enabled: antenna sharing enabled or not (FW capability)
+ * @mgmt_retry_max: maximum retries for management frame
+ * @bmiss_skip_full_scan: Decide if full scan can be skipped in firmware if no
+ * candidate is found in partial scan based on channel map
+ * @enable_ring_buffer: Decide to enable/disable ring buffer for bug report
  */
 struct wlan_mlme_generic {
 	enum band_info band_capability;
@@ -1094,6 +1154,10 @@ struct wlan_mlme_generic {
 	bool enable_remove_time_stamp_sync_cmd;
 	bool data_stall_recovery_fw_support;
 	bool enable_change_channel_bandwidth;
+	bool as_enabled;
+	uint8_t mgmt_retry_max;
+	bool bmiss_skip_full_scan;
+	bool enable_ring_buffer;
 };
 
 /*
@@ -1112,20 +1176,26 @@ struct wlan_mlme_product_details_cfg {
 	char manufacture_product_version[WLAN_CFG_MFR_PRODUCT_VERSION_LEN + 1];
 };
 
+#define MLME_GET_DFS_CHAN_WEIGHT(np_chan_weight) (np_chan_weight & 0x000000FF)
+
 /*
  * struct wlan_mlme_acs - All acs related cfg items
  * @is_acs_with_more_param - to enable acs with more param
  * @auto_channel_select_weight - to set acs channel weight
  * @is_vendor_acs_support - enable application based channel selection
  * @is_acs_support_for_dfs_ltecoex - enable channel for dfs and lte coex
+ * @np_chan_weightage: Weightage to be given to non preferred channels.
  * @is_external_acs_policy - control external policy
+ * @force_sap_start: Force SAP start when no channel is found suitable
  */
 struct wlan_mlme_acs {
 	bool is_acs_with_more_param;
 	uint32_t auto_channel_select_weight;
 	bool is_vendor_acs_support;
 	bool is_acs_support_for_dfs_ltecoex;
+	uint32_t np_chan_weightage;
 	bool is_external_acs_policy;
+	bool force_sap_start;
 };
 
 /*
@@ -1313,17 +1383,19 @@ struct bss_load_trigger {
 };
 
 /*
- * AKM suites supported by firmware for
- * roaming
+ * AKM suites supported by firmware for roaming
  */
 #define AKM_FT_SAE           0
 #define AKM_FT_SUITEB_SHA384 1
 #define AKM_FT_FILS          2
+#define AKM_SAE              3
+#define AKM_OWE              4
 
 /*
  * @mawc_roam_enabled:              Enable/Disable MAWC during roaming
  * @enable_fast_roam_in_concurrency:Enable LFR roaming on STA during concurrency
  * @lfr3_roaming_offload:           Enable/disable roam offload feature
+ * @enable_self_bss_roam:               enable roaming to connected BSSID
  * @enable_disconnect_roam_offload: enable disassoc/deauth roam scan.
  * @enable_idle_roam: flag to enable/disable idle roam in fw
  * @idle_roam_rssi_delta: rssi delta of connected ap which is used to
@@ -1334,6 +1406,8 @@ struct bss_load_trigger {
  * below which the connection is idle.
  * @idle_roam_min_rssi: Minimum rssi of connected AP to be considered for
  * idle roam trigger.
+ * @roam_trigger_bitmap:            Bitmap of roaming triggers.
+ * @sta_roam_disable                STA roaming disabled by interfaces
  * @early_stop_scan_enable:         Set early stop scan
  * @enable_5g_band_pref:            Enable preference for 5G from INI
  * @ese_enabled:                    Enable ESE feature
@@ -1419,12 +1493,17 @@ struct bss_load_trigger {
  * @roam_scan_period_after_inactivity: Roam scan period after device was in
  * inactive state
  * @fw_akm_bitmap:                  Supported Akm suites of firmware
+ * @roam_full_scan_period: Idle period in seconds between two successive
+ * full channel roam scans
+ * @sae_single_pmk_feature_enabled: Contains value of ini
+ * sae_single_pmk_feature_enabled
  */
 struct wlan_mlme_lfr_cfg {
 	bool mawc_roam_enabled;
 	bool enable_fast_roam_in_concurrency;
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 	bool lfr3_roaming_offload;
+	bool enable_self_bss_roam;
 	bool enable_disconnect_roam_offload;
 	bool enable_idle_roam;
 	uint32_t idle_roam_rssi_delta;
@@ -1432,6 +1511,8 @@ struct wlan_mlme_lfr_cfg {
 	uint32_t idle_data_packet_count;
 	uint32_t idle_roam_band;
 	int32_t idle_roam_min_rssi;
+	uint32_t roam_trigger_bitmap;
+	uint32_t sta_roam_disable;
 #endif
 	bool early_stop_scan_enable;
 	bool enable_5g_band_pref;
@@ -1477,7 +1558,7 @@ struct wlan_mlme_lfr_cfg {
 	uint32_t max_num_pre_auth;
 	uint32_t roam_preauth_retry_count;
 	uint32_t roam_preauth_no_ack_timeout;
-	uint32_t roam_rssi_diff;
+	uint8_t roam_rssi_diff;
 	bool roam_scan_offload_enabled;
 	uint32_t neighbor_scan_timer_period;
 	uint32_t neighbor_scan_min_timer_period;
@@ -1521,6 +1602,10 @@ struct wlan_mlme_lfr_cfg {
 	uint32_t roam_inactive_data_packet_count;
 	uint32_t roam_scan_period_after_inactivity;
 	uint32_t fw_akm_bitmap;
+	uint32_t roam_full_scan_period;
+#if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
+	bool sae_single_pmk_feature_enabled;
+#endif
 };
 
 /**
@@ -1773,6 +1858,9 @@ struct wlan_mlme_per_slot_scoring {
  * @roam_trigger_bitmap: bitmap for various roam triggers
  * @roam_score_delta: percentage delta in roam score
  * @apsd_enabled: Enable automatic power save delivery
+ * @vendor_roam_score_algorithm: Preferred vendor roam score algorithm
+ * @min_roam_score_delta: Minimum difference between connected AP's and
+ *			candidate AP's roam score to start roaming.
  */
 struct wlan_mlme_scoring_cfg {
 	bool enable_scoring_for_roam;
@@ -1786,6 +1874,8 @@ struct wlan_mlme_scoring_cfg {
 	uint32_t roam_trigger_bitmap;
 	uint32_t roam_score_delta;
 	bool apsd_enabled;
+	uint32_t vendor_roam_score_algorithm;
+	uint32_t min_roam_score_delta;
 };
 
 /* struct wlan_mlme_threshold - Threshold related config items
@@ -2040,6 +2130,7 @@ struct wlan_mlme_mwc {
  * @avoid_acs_freq_list: List of the frequencies which need to be avoided
  * during acs
  * @avoid_acs_freq_list_num: Number of the frequencies to be avoided during acs
+ * @ignore_fw_reg_offload_ind: Ignore fw regulatory offload indication
  */
 struct wlan_mlme_reg {
 	uint32_t self_gen_frm_pwr;
@@ -2057,6 +2148,7 @@ struct wlan_mlme_reg {
 	uint16_t avoid_acs_freq_list[CFG_VALID_CHANNEL_LIST_LEN];
 	uint8_t avoid_acs_freq_list_num;
 #endif
+	bool ignore_fw_reg_offload_ind;
 };
 
 /**
@@ -2178,6 +2270,41 @@ struct wlan_mlme_cfg {
 	struct wlan_mlme_reg reg;
 	struct roam_trigger_score_delta trig_score_delta[NUM_OF_ROAM_TRIGGERS];
 	struct roam_trigger_min_rssi trig_min_rssi[NUM_OF_ROAM_TRIGGERS];
+};
+
+/**
+ * struct mlme_pmk_info - SAE Roaming using single pmk info
+ * @pmk: pmk
+ * @pmk_len: pmk length
+ */
+struct mlme_pmk_info {
+	uint8_t pmk[CFG_MAX_PMK_LEN];
+	uint8_t pmk_len;
+};
+
+/**
+ * struct wlan_mlme_sae_single_pmk - SAE Roaming using single pmk configuration
+ * structure
+ * @sae_single_pmk_ap: Current connected AP has VSIE or not
+ * @pmk_info: pmk information
+ */
+struct wlan_mlme_sae_single_pmk {
+	bool sae_single_pmk_ap;
+	struct mlme_pmk_info pmk_info;
+};
+
+/**
+ * struct mlme_roam_debug_info - Roam debug information storage structure.
+ * @trigger:            Roam trigger related data
+ * @scan:               Roam scan related data structure.
+ * @result:             Roam result parameters.
+ * @data_11kv:          Neighbor report/BTM parameters.
+ */
+struct mlme_roam_debug_info {
+	struct wmi_roam_trigger_info trigger;
+	struct wmi_roam_scan_data scan;
+	struct wmi_roam_result result;
+	struct wmi_neighbor_report_data data_11kv;
 };
 
 #endif

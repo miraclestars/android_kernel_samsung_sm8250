@@ -651,6 +651,22 @@ ucfg_mlme_is_override_ht20_40_24g(struct wlan_objmgr_psoc *psoc, bool *val)
 }
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
+QDF_STATUS ucfg_mlme_get_roam_disable_config(struct wlan_objmgr_psoc *psoc,
+					     uint32_t *val)
+{
+	struct wlan_mlme_psoc_obj *mlme_obj;
+
+	mlme_obj = mlme_get_psoc_obj(psoc);
+	if (!mlme_obj) {
+		*val = cfg_default(CFG_STA_DISABLE_ROAM);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	*val = mlme_obj->cfg.lfr.sta_roam_disable;
+
+	 return QDF_STATUS_SUCCESS;
+}
+
 QDF_STATUS
 ucfg_mlme_get_roaming_offload(struct wlan_objmgr_psoc *psoc,
 			      bool *val)
@@ -698,20 +714,6 @@ ucfg_mlme_get_first_scan_bucket_threshold(struct wlan_objmgr_psoc *psoc,
 
 	*val = mlme_obj->cfg.lfr.first_scan_bucket_threshold;
 
-	return QDF_STATUS_SUCCESS;
-}
-
-QDF_STATUS
-ucfg_mlme_set_fw_supported_roaming_akm(struct wlan_objmgr_psoc *psoc,
-				       uint32_t val)
-{
-	struct wlan_mlme_psoc_obj *mlme_obj;
-
-	mlme_obj = mlme_get_psoc_obj(psoc);
-	if (!mlme_obj)
-		return QDF_STATUS_E_INVAL;
-
-	mlme_obj->cfg.lfr.fw_akm_bitmap = val;
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -875,6 +877,14 @@ ucfg_mlme_get_delay_before_vdev_stop(struct wlan_objmgr_psoc *psoc,
 
 	return QDF_STATUS_SUCCESS;
 }
+
+#if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
+void ucfg_mlme_update_sae_single_pmk_info(struct wlan_objmgr_vdev *vdev,
+					  struct mlme_pmk_info *sae_single_pmk)
+{
+	wlan_mlme_update_sae_single_pmk(vdev, sae_single_pmk);
+}
+#endif
 
 QDF_STATUS
 ucfg_mlme_get_roam_bmiss_final_bcnt(struct wlan_objmgr_psoc *psoc,
@@ -1680,3 +1690,35 @@ ucfg_mlme_set_channel_bonding_5ghz(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
+bool ucfg_mlme_validate_full_roam_scan_period(uint32_t full_roam_scan_period)
+{
+	bool is_valid = true;
+	uint32_t min, max;
+
+	if (!cfg_in_range(CFG_LFR_FULL_ROAM_SCAN_REFRESH_PERIOD,
+			  full_roam_scan_period)) {
+		min = (cfg_min(CFG_LFR_FULL_ROAM_SCAN_REFRESH_PERIOD));
+		max = (cfg_max(CFG_LFR_FULL_ROAM_SCAN_REFRESH_PERIOD));
+		mlme_legacy_err("Full roam scan period value %d is out of range (Min: %d Max: %d)",
+				full_roam_scan_period, min, max);
+		is_valid = false;
+	}
+
+	return is_valid;
+}
+
+bool ucfg_mlme_validate_scan_period(uint32_t roam_scan_period)
+{
+	bool is_valid = true;
+
+	if (!cfg_in_range(CFG_LFR_EMPTY_SCAN_REFRESH_PERIOD,
+			  roam_scan_period)) {
+		mlme_legacy_err("Roam scan period value %d msec is out of range (Min: %d msec Max: %d msec)",
+				roam_scan_period,
+				cfg_min(CFG_LFR_EMPTY_SCAN_REFRESH_PERIOD),
+				cfg_max(CFG_LFR_EMPTY_SCAN_REFRESH_PERIOD));
+		is_valid = false;
+	}
+
+	return is_valid;
+}

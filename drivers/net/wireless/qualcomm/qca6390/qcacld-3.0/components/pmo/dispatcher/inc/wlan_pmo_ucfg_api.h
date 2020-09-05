@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -406,6 +406,28 @@ ucfg_pmo_ns_addr_scope(uint32_t ipv6_scope);
 QDF_STATUS ucfg_pmo_enable_hw_filter_in_fwr(struct wlan_objmgr_vdev *vdev);
 
 /**
+ * ucfg_pmo_enable_action_frame_patterns() - enable the action frame wake up
+ * patterns as part of the enable host offloads.
+ * @vdev: objmgr vdev to configure
+ * @suspend_type: Suspend type. Runtime PM or System Suspend mode
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+ucfg_pmo_enable_action_frame_patterns(struct wlan_objmgr_vdev *vdev,
+				      enum qdf_suspend_type suspend_type);
+
+/**
+ * ucfg_pmo_disable_action_frame_patterns() - Reset the action frame wake up
+ * patterns as a part of suspend resume.
+ * @vdev: objmgr vdev to configure
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+ucfg_pmo_disable_action_frame_patterns(struct wlan_objmgr_vdev *vdev);
+
+/**
  * ucfg_pmo_disable_hw_filter_in_fwr() - disable previously configured hw filter
  * @vdev: objmgr vdev to configure
  *
@@ -777,6 +799,30 @@ QDF_STATUS ucfg_pmo_psoc_user_space_suspend_req(struct wlan_objmgr_psoc *psoc,
  */
 QDF_STATUS ucfg_pmo_psoc_user_space_resume_req(struct wlan_objmgr_psoc *psoc,
 					       enum qdf_suspend_type type);
+
+/**
+ * ucfg_pmo_suspend_all_components() -  Suspend all components
+ * @psoc: objmgr psoc handle
+ * @type: type of suspend
+ *
+ * Suspend all components registered to pmo
+ *
+ * Return: QDF status
+ */
+QDF_STATUS ucfg_pmo_suspend_all_components(struct wlan_objmgr_psoc *psoc,
+					   enum qdf_suspend_type type);
+
+/**
+ * ucfg_pmo_resume_all_components() -  Resume all components
+ * @psoc: objmgr psoc handle
+ * @type: type of suspend from which resume needed
+ *
+ * Resume all components registered to pmo
+ *
+ * Return: QDF status
+ */
+QDF_STATUS ucfg_pmo_resume_all_components(struct wlan_objmgr_psoc *psoc,
+					  enum qdf_suspend_type type);
 
 /**
  * ucfg_pmo_psoc_bus_suspend_req(): handles bus suspend for psoc
@@ -1393,6 +1439,20 @@ static inline QDF_STATUS
 ucfg_pmo_psoc_user_space_resume_req(
 		struct wlan_objmgr_psoc *psoc,
 		enum qdf_suspend_type type)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+ucfg_pmo_suspend_all_components(struct wlan_objmgr_psoc *psoc,
+				enum qdf_suspend_type type)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+ucfg_pmo_resume_all_components(struct wlan_objmgr_psoc *psoc,
+			       enum qdf_suspend_type type)
 {
 	return QDF_STATUS_SUCCESS;
 }

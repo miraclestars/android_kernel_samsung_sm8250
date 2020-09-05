@@ -166,6 +166,7 @@ struct sAniProbeRspStruct {
  * @htSmpsconfig: HT SMPS config
  * @htLdpcCapable: HT LDPC capable
  * @vhtLdpcCapable: VHT LDPC capable
+ * @vht_mcs_10_11_supp: VHT MCS 10 & 11 support
  * @smesessionId: sme session id
  * @wpa_rsn: RSN capable
  * @capab_info: capabality info
@@ -265,6 +266,7 @@ typedef struct {
 	bool send_smps_action;
 	uint8_t htLdpcCapable;
 	uint8_t vhtLdpcCapable;
+	uint8_t vht_mcs_10_11_supp;
 	uint8_t smesessionId;
 	uint8_t wpa_rsn;
 	uint16_t capab_info;
@@ -518,7 +520,9 @@ typedef enum eDelStaReasonCode {
 	HAL_DEL_STA_REASON_CODE_TIM_BASED = 0x2,
 	HAL_DEL_STA_REASON_CODE_RA_BASED = 0x3,
 	HAL_DEL_STA_REASON_CODE_UNKNOWN_A2 = 0x4,
-	HAL_DEL_STA_REASON_CODE_BTM_DISASSOC_IMMINENT = 0x5
+	HAL_DEL_STA_REASON_CODE_BTM_DISASSOC_IMMINENT = 0x5,
+	HAL_DEL_STA_REASON_CODE_SA_QUERY_TIMEOUT = 0x6,
+	HAL_DEL_STA_REASON_CODE_XRETRY = 0x7,
 } tDelStaReasonCode;
 
 typedef enum eSmpsModeValue {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -23,8 +23,7 @@
 #ifndef _WLAN_NAN_API_H_
 #define _WLAN_NAN_API_H_
 
-#include "wlan_objmgr_vdev_obj.h"
-#include "wlan_objmgr_psoc_obj.h"
+#include "wlan_objmgr_peer_obj.h"
 #include "wlan_policy_mgr_public_struct.h"
 #include "qdf_status.h"
 
@@ -201,6 +200,13 @@ uint8_t wlan_nan_get_disc_5g_ch(struct wlan_objmgr_psoc *psoc);
  */
 bool wlan_nan_get_sap_conc_support(struct wlan_objmgr_psoc *psoc);
 
+/**
+ * nan_disable_cleanup: Cleanup NAN state upon NAN disable
+ * @psoc: pointer to psoc object
+ *
+ * Return: Cleanup NAN state upon NAN disable
+ */
+QDF_STATUS nan_disable_cleanup(struct wlan_objmgr_psoc *psoc);
 #else /* WLAN_FEATURE_NAN */
 static inline QDF_STATUS nan_init(void)
 {
@@ -238,6 +244,12 @@ static inline
 bool wlan_nan_get_sap_conc_support(struct wlan_objmgr_psoc *psoc)
 {
 	return false;
+}
+
+static inline
+QDF_STATUS nan_disable_cleanup(struct wlan_objmgr_psoc *psoc)
+{
+	return QDF_STATUS_E_FAILURE;
 }
 #endif /* WLAN_FEATURE_NAN */
 #endif /* _WLAN_NAN_API_H_ */

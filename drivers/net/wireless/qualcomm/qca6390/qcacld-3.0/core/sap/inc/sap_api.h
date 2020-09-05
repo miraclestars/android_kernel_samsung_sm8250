@@ -430,6 +430,8 @@ struct sap_acs_cfg {
 	uint8_t    end_ch;
 	uint8_t    *ch_list;
 	uint8_t    ch_list_count;
+	uint8_t    *master_ch_list;
+	uint8_t    master_ch_list_count;
 #ifdef FEATURE_WLAN_AP_AP_ACS_OPTIMIZE
 	uint8_t    skip_scan_status;
 	uint8_t    skip_scan_range1_stch;
@@ -439,8 +441,8 @@ struct sap_acs_cfg {
 #endif
 
 	uint16_t   ch_width;
-	uint8_t    pcl_channels[QDF_MAX_NUM_CHAN];
-	uint8_t    pcl_channels_weight_list[QDF_MAX_NUM_CHAN];
+	uint8_t    pcl_channels[NUM_CHANNELS];
+	uint8_t    pcl_channels_weight_list[NUM_CHANNELS];
 	uint32_t   pcl_ch_count;
 	uint8_t    is_ht_enabled;
 	uint8_t    is_vht_enabled;
@@ -464,31 +466,6 @@ enum  sap_acs_dfs_mode {
 	ACS_DFS_MODE_ENABLE,
 	ACS_DFS_MODE_DISABLE,
 	ACS_DFS_MODE_DEPRIORITIZE
-};
-
-/**
- * enum sap_csa_reason_code - SAP channel switch reason code
- * @CSA_REASON_UNKNOWN: Unknown reason
- * @CSA_REASON_STA_CONNECT_DFS_TO_NON_DFS: STA connection from DFS to NON DFS.
- * @CSA_REASON_USER_INITIATED: User initiated form north bound.
- * @CSA_REASON_PEER_ACTION_FRAME: Action frame received on sta iface.
- * @CSA_REASON_PRE_CAC_SUCCESS: Pre CAC success.
- * @CSA_REASON_CONCURRENT_STA_CHANGED_CHANNEL: concurrent sta changed channel.
- * @CSA_REASON_UNSAFE_CHANNEL: Unsafe channel.
- * @CSA_REASON_LTE_COEX: LTE coex.
- * @CSA_REASON_CONCURRENT_NAN_EVENT: NAN concurrency.
- *
- */
-enum sap_csa_reason_code {
-	CSA_REASON_UNKNOWN,
-	CSA_REASON_STA_CONNECT_DFS_TO_NON_DFS,
-	CSA_REASON_USER_INITIATED,
-	CSA_REASON_PEER_ACTION_FRAME,
-	CSA_REASON_PRE_CAC_SUCCESS,
-	CSA_REASON_CONCURRENT_STA_CHANGED_CHANNEL,
-	CSA_REASON_UNSAFE_CHANNEL,
-	CSA_REASON_LTE_COEX,
-	CSA_REASON_CONCURRENT_NAN_EVENT
 };
 
 struct sap_config {
@@ -654,14 +631,6 @@ typedef struct tagSapStruct {
 	bool acs_with_more_param;
 	bool enable_dfs_phy_error_logs;
 } tSapStruct, *tpSapStruct;
-
-#ifdef FEATURE_WLAN_CH_AVOID
-/* Store channel safety information */
-typedef struct {
-	uint16_t channelNumber;
-	bool isSafe;
-} sapSafeChannelType;
-#endif /* FEATURE_WLAN_CH_AVOID */
 
 /**
  * struct sap_context - per-BSS Context for SAP
@@ -1346,6 +1315,17 @@ QDF_STATUS wlansap_acs_chselect(struct sap_context *sap_context,
 				void *pusr_context);
 
 /**
+ * sap_undo_acs() - Undo acs i.e free the allocated ch lists
+ * @sap_ctx: pointer to the SAP context
+ *
+ * This function will free the memory allocated to the sap ctx channel list, acs
+ * cfg ch list and master ch list.
+ *
+ * Return: None
+ */
+void sap_undo_acs(struct sap_context *sap_context, struct sap_config *sap_cfg);
+
+/**
  * wlansap_get_chan_width() - get sap channel width.
  * @sap_ctx: pointer to the SAP context
  *
@@ -1450,6 +1430,29 @@ QDF_STATUS wlansap_filter_ch_based_acs(struct sap_context *sap_ctx,
  */
 uint8_t
 wlansap_get_safe_channel_from_pcl_and_acs_range(struct sap_context *sap_ctx);
+
+/**
+ * wlansap_get_chan_band_restrict() -  get new chan for band change
+ * @sap_ctx: sap context pointer
+ *
+ * Sap/p2p go channel switch from 5G to 2G by CSA when 5G band disabled to
+ * avoid conflict with modem N79.
+ * Sap/p2p go channel restore to 5G channel when 5G band enabled.
+ *
+ * Return - restart channel
+ */
+uint8_t wlansap_get_chan_band_restrict(struct sap_context *sap_ctx);
+
+/**
+ * sap_dump_acs_channel() - dump acs channel list
+ * @acs_cfg: acs config
+ *
+ * This function dump acs channel list
+ *
+ * Return: void.
+ */
+void sap_dump_acs_channel(struct sap_acs_cfg *acs_cfg);
+
 #ifdef __cplusplus
 }
 #endif

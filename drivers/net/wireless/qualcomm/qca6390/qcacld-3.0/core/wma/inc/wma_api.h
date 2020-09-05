@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -179,10 +179,27 @@ bool wma_is_rx_ldpc_supported_for_channel(uint32_t channel);
 
 #ifdef WLAN_FEATURE_LINK_LAYER_STATS
 int wma_unified_radio_tx_mem_free(void *handle);
+
+/*
+ * wma_unified_link_stats_results_mem_free() - Free the memory for
+ * link_stats_results->results allocated when event comes.
+ * @link_stats_results: pointer to the memory that is to be freed
+ *
+ * Return: None
+ */
+void
+wma_unified_link_stats_results_mem_free(tSirLLStatsResults *link_stats_results);
+
 #else /* WLAN_FEATURE_LINK_LAYER_STATS */
 static inline int wma_unified_radio_tx_mem_free(void *handle)
 {
 	return 0;
+}
+
+static void
+wma_unified_link_stats_results_mem_free(tSirLLStatsResults *link_stats_results)
+{
+	return;
 }
 #endif /* WLAN_FEATURE_LINK_LAYER_STATS */
 
@@ -271,6 +288,25 @@ QDF_STATUS wma_set_cts2self_for_p2p_go(void *wma_handle,
 		uint32_t cts2self_for_p2p_go);
 QDF_STATUS wma_set_tx_rx_aggregation_size
 	(struct sir_set_tx_rx_aggregation_size *tx_rx_aggregation_size);
+
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+/**
+ * wma_get_roam_scan_ch() - API to get roam scan channel list.
+ * @wma_handle: pointer to wma handle.
+ * @vdev_id: vdev id
+ *
+ * Return: QDF_STATUS.
+ */
+QDF_STATUS wma_get_roam_scan_ch(wmi_unified_t wma,
+				uint8_t vdev_id);
+#else
+static inline
+QDF_STATUS wma_get_roam_scan_ch(wmi_unified_t wma,
+				uint8_t vdev_id)
+{
+	return QDF_STATUS_E_FAILURE;
+}
+#endif
 
 /**
  * wma_set_tx_rx_aggregation_size_per_ac() - set aggregation size per ac
@@ -424,15 +460,19 @@ void wma_wmi_stop(void);
 
 /**
  * wma_get_mcs_idx() - get mcs index
- * @max_rate: max rate
+ * @raw_rate: raw rate from fw
  * @rate_flags: rate flags
  * @nss: nss
+ * @dcm: dcm
+ * @guard_interval: guard interval
  * @mcs_rate_flag: mcs rate flags
  *
  *  Return: mcs index
  */
-uint8_t wma_get_mcs_idx(uint16_t max_rate, uint8_t rate_flags,
-			uint8_t *nss, uint8_t *mcs_rate_flag);
+uint8_t wma_get_mcs_idx(uint16_t raw_rate, enum tx_rate_info rate_flags,
+			uint8_t *nss, uint8_t *dcm,
+			enum txrate_gi *guard_interval,
+			enum tx_rate_info *mcs_rate_flag);
 
 /**
  * wma_get_hidden_ssid_restart_in_progress() - check if hidden ssid restart is
@@ -677,4 +717,13 @@ int wma_wlm_stats_req(int vdev_id, uint32_t bitmask, uint32_t max_size,
 int wma_wlm_stats_rsp(void *wma_ctx, uint8_t *event, uint32_t len);
 #endif /* FEATURE_WLM_STATS */
 
+/**
+ * wma_update_roam_offload_flag() -  update roam offload flag to fw
+ * @wma:     wma handle
+ * @params: Roaming enable/disable params
+ *
+ * Return: none
+ */
+void wma_update_roam_offload_flag(void *handle,
+				  struct roam_init_params *params);
 #endif /* WMA_API_H */

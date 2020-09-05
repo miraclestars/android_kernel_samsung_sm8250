@@ -225,8 +225,27 @@ typedef struct tLimPreAuthTable {
 	tLimPreAuthNode **pTable;
 } tLimPreAuthTable, *tpLimPreAuthTable;
 
-/* / Per STA context structure definition */
-typedef struct sLimMlmStaContext {
+/**
+ * struct lim_sta_context - LIM per STA structure
+ * @mlmState: LIM State
+ * @authType: Authentication algorithm
+ * @akm_type: AKM of the connection
+ * @listenInterval: Listen interval
+ * @capabilityInfo: Capabilities
+ * @disassocReason: Disassociation reason code
+ * @resultCode:     Result code
+ * @subType:        Indicates association or reassociation
+ * @updateContext:  Update context
+ * @schClean:       Scheduler clean
+ * @htCapability:   802.11n HT capability
+ * @vhtCapability:  802.11ac VHT capability
+ * @cleanupTrigger: Cleanup trigger
+ * @protStatusCode: Protocol Status code
+ * @he_capable:     802.11ax HE capability
+ * @owe_ie:         Pointer to OWE IE
+ * @owe_ie_len:     Length of OWE IE
+ */
+struct lim_sta_context {
 	tLimMlmStates mlmState;
 	tAniAuthType authType;		/* auth algo in auth frame */
 	enum ani_akm_type akm_type;	/* akm in rsn/wpa ie */
@@ -249,7 +268,7 @@ typedef struct sLimMlmStaContext {
 #endif
 	uint8_t *owe_ie;
 	uint32_t owe_ie_len;
-} tLimMlmStaContext, *tpLimMlmStaContext;
+};
 
 /* Structure definition to hold deferred messages queue parameters */
 typedef struct sLimDeferredMsgQParams {
@@ -470,4 +489,17 @@ typedef struct sLimSpecMgmtInfo {
 	tLimDot11hChanSwStates dot11hChanSwState;
 } tLimSpecMgmtInfo, *tpLimSpecMgmtInfo;
 
+/**
+ * struct lim_delba_req_info - Delba request struct
+ * @vdev_id: vdev id
+ * @peer_macaddr: peer mac address
+ * @tid: tid
+ * @reason_code: reason code
+ */
+struct lim_delba_req_info {
+	uint8_t vdev_id;
+	tSirMacAddr peer_macaddr;
+	uint8_t tid;
+	uint8_t reason_code;
+};
 #endif

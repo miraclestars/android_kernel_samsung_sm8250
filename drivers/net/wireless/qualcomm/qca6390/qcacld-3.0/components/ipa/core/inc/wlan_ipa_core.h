@@ -95,10 +95,21 @@ QDF_STATUS wlan_ipa_uc_enable_pipes(struct wlan_ipa_priv *ipa_ctx);
 /**
  * wlan_ipa_uc_disable_pipes() - Disable IPA uC pipes
  * @ipa_ctx: IPA context
+ * @force_disable: If true, immediately disable IPA pipes. If false, wait for
+ *		   pending IPA WLAN TX completions
  *
  * Return: QDF_STATUS
  */
-QDF_STATUS wlan_ipa_uc_disable_pipes(struct wlan_ipa_priv *ipa_ctx);
+QDF_STATUS wlan_ipa_uc_disable_pipes(struct wlan_ipa_priv *ipa_ctx,
+				     bool force_disable);
+
+/**
+ * wlan_ipa_is_tx_pending() - Check if IPA TX Completions are pending
+ * @ipa_ctx: IPA context
+ *
+ * Return: bool
+ */
+bool wlan_ipa_is_tx_pending(struct wlan_ipa_priv *ipa_ctx);
 
 /**
  * wlan_ipa_set_perf_level() - Set IPA performance level
@@ -131,6 +142,18 @@ QDF_STATUS wlan_ipa_init_perf_level(struct wlan_ipa_priv *ipa_ctx);
  */
 struct wlan_ipa_iface_context
 *wlan_ipa_get_iface(struct wlan_ipa_priv *ipa_ctx, uint8_t mode);
+
+/**
+ * wlan_ipa_get_iface_by_mode_netdev() - Get IPA interface
+ * @ipa_ctx: IPA context
+ * @ndev: Interface netdev pointer
+ * @mode: Interface device mode
+ *
+ * Return: IPA interface address
+ */
+struct wlan_ipa_iface_context *
+wlan_ipa_get_iface_by_mode_netdev(struct wlan_ipa_priv *ipa_ctx,
+				  qdf_netdev_t ndev, uint8_t mode);
 
 #ifndef CONFIG_IPA_WDI_UNIFIED_API
 
@@ -326,6 +349,7 @@ bool wlan_ipa_is_rm_released(struct wlan_ipa_priv *ipa_ctx)
 
 #ifdef FEATURE_METERING
 
+#ifndef QCA_WIFI_QCA6390
 /**
  * wlan_ipa_uc_op_metering() - IPA uC operation for stats and quota limit
  * @ipa_ctx: IPA context
@@ -334,7 +358,15 @@ bool wlan_ipa_is_rm_released(struct wlan_ipa_priv *ipa_ctx)
  * Return: QDF_STATUS enumeration
  */
 QDF_STATUS wlan_ipa_uc_op_metering(struct wlan_ipa_priv *ipa_ctx,
-				  struct op_msg_type *op_msg);
+				   struct op_msg_type *op_msg);
+#else
+static inline
+QDF_STATUS wlan_ipa_uc_op_metering(struct wlan_ipa_priv *ipa_ctx,
+				   struct op_msg_type *op_msg)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
 
 /**
  * wlan_ipa_wdi_meter_notifier_cb() - SSR wrapper for
@@ -356,6 +388,23 @@ void wlan_ipa_wdi_meter_notifier_cb(qdf_ipa_wdi_meter_evt_type_t evt,
  * Return: QDF_STATUS enumeration
  */
 void wlan_ipa_init_metering(struct wlan_ipa_priv *ipa_ctx);
+
+#ifdef WDI3_STATS_UPDATE
+/**
+ * wlan_ipa_update_tx_stats() - send embedded tx traffic in bytes to IPA
+ * @ipa_ctx: IPA context
+ *
+ * Return: void
+ */
+void wlan_ipa_update_tx_stats(struct wlan_ipa_priv *ipa_ctx, uint64_t sta_tx,
+			      uint64_t sap_tx);
+#else
+static inline void wlan_ipa_update_tx_stats(struct wlan_ipa_priv *ipa_ctx,
+					    uint64_t sta_tx, uint64_t sap_tx)
+{
+}
+#endif /* WDI3_STATS_UPDATE */
+
 #else
 
 static inline
@@ -370,6 +419,11 @@ static inline void wlan_ipa_wdi_meter_notifier_cb(void)
 }
 
 static inline void wlan_ipa_init_metering(struct wlan_ipa_priv *ipa_ctx)
+{
+}
+
+static inline void wlan_ipa_update_tx_stats(struct wlan_ipa_priv *ipa_ctx,
+					    uint64_t sta_tx, uint64_t sap_tx)
 {
 }
 #endif /* FEATURE_METERING */
@@ -637,6 +691,19 @@ int wlan_ipa_uc_smmu_map(bool map, uint32_t num_buf, qdf_mem_info_t *buf_arr);
  * Return: true if FW WDI actived, false otherwise
  */
 bool wlan_ipa_is_fw_wdi_activated(struct wlan_ipa_priv *ipa_ctx);
+
+/**
+ * wlan_ipa_uc_cleanup_sta - disconnect and cleanup sta iface
+ * @ipa_ctx: IPA context
+ * @net_dev: Interface net device
+ *
+ * Send disconnect sta event to IPA driver and cleanup IPA iface
+ * if not yet done
+ *
+ * Return: void
+ */
+void wlan_ipa_uc_cleanup_sta(struct wlan_ipa_priv *ipa_ctx,
+			     qdf_netdev_t net_dev);
 
 /**
  * wlan_ipa_uc_disconnect_ap() - send ap disconnect event

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -32,6 +32,7 @@
 #include "wlan_pmo_pkt_filter.h"
 #include "wlan_pmo_hw_filter.h"
 #include "wlan_pmo_cfg.h"
+#include "wlan_pmo_static_config.h"
 #include "cfg_ucfg_api.h"
 
 QDF_STATUS ucfg_pmo_psoc_open(struct wlan_objmgr_psoc *psoc)
@@ -373,12 +374,23 @@ ucfg_pmo_psoc_user_space_suspend_req(struct wlan_objmgr_psoc *psoc,
 	return pmo_core_psoc_user_space_suspend_req(psoc, type);
 }
 
-
 QDF_STATUS
 ucfg_pmo_psoc_user_space_resume_req(struct wlan_objmgr_psoc *psoc,
 				    enum qdf_suspend_type type)
 {
 	return pmo_core_psoc_user_space_resume_req(psoc, type);
+}
+
+QDF_STATUS ucfg_pmo_suspend_all_components(struct wlan_objmgr_psoc *psoc,
+					   enum qdf_suspend_type type)
+{
+	return pmo_suspend_all_components(psoc, type);
+}
+
+QDF_STATUS ucfg_pmo_resume_all_components(struct wlan_objmgr_psoc *psoc,
+					  enum qdf_suspend_type type)
+{
+	return pmo_resume_all_components(psoc, type);
 }
 
 QDF_STATUS
@@ -465,6 +477,18 @@ void ucfg_pmo_psoc_wakeup_host_event_received(struct wlan_objmgr_psoc *psoc)
 QDF_STATUS ucfg_pmo_enable_hw_filter_in_fwr(struct wlan_objmgr_vdev *vdev)
 {
 	return pmo_core_enable_hw_filter_in_fwr(vdev);
+}
+
+QDF_STATUS
+ucfg_pmo_enable_action_frame_patterns(struct wlan_objmgr_vdev *vdev,
+				      enum qdf_suspend_type suspend_type)
+{
+	return pmo_register_action_frame_patterns(vdev, suspend_type);
+}
+
+QDF_STATUS ucfg_pmo_disable_action_frame_patterns(struct wlan_objmgr_vdev *vdev)
+{
+	return pmo_clear_action_frame_patterns(vdev);
 }
 
 QDF_STATUS ucfg_pmo_disable_hw_filter_in_fwr(struct wlan_objmgr_vdev *vdev)

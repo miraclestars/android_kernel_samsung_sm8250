@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -2229,8 +2229,7 @@ lim_tdls_populate_matching_rate_set(struct mac_context *mac_ctx,
 				    tDot11fIEVHTCaps *vht_caps)
 {
 	tSirMacRateSet temp_rate_set;
-	uint32_t i, j, val, min, is_a_rate;
-	tSirMacRateSet temp_rate_set2;
+	uint32_t i, j, is_a_rate;
 	uint32_t phymode;
 	uint8_t mcsSet[SIZE_OF_SUPPORTED_MCS_SET];
 	struct supported_rates *rates;
@@ -2240,73 +2239,8 @@ lim_tdls_populate_matching_rate_set(struct mac_context *mac_ctx,
 	qdf_size_t val_len;
 
 	is_a_rate = 0;
-	temp_rate_set2.numRates = 0;
 
 	lim_get_phy_mode(mac_ctx, &phymode, NULL);
-
-	/* get own rate set */
-	val_len = mac_ctx->mlme_cfg->rates.opr_rate_set.len;
-	if (wlan_mlme_get_cfg_str((uint8_t *)&temp_rate_set.rate,
-				  &mac_ctx->mlme_cfg->rates.opr_rate_set,
-				  &val_len) != QDF_STATUS_SUCCESS) {
-		/* Could not get rateset from CFG. Log error. */
-		pe_err("could not retrieve rateset");
-		val_len = 0;
-	}
-	temp_rate_set.numRates = val_len;
-
-	if (phymode == WNI_CFG_PHY_MODE_11G) {
-		/* get own extended rate set */
-		val_len = mac_ctx->mlme_cfg->rates.ext_opr_rate_set.len;
-		if (wlan_mlme_get_cfg_str(
-			(uint8_t *)&temp_rate_set2.rate,
-			&mac_ctx->mlme_cfg->rates.ext_opr_rate_set,
-			&val_len) != QDF_STATUS_SUCCESS) {
-			/* Could not get rateset from CFG. Log error. */
-			pe_err("could not retrieve extrateset");
-			val_len = 0;
-		}
-			temp_rate_set2.numRates = val_len;
-	}
-
-	if ((temp_rate_set.numRates + temp_rate_set2.numRates) > 12) {
-		pe_err("more than 12 rates in CFG");
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	/**
-	 * Handling of the rate set IEs is the following:
-	 * - keep only rates that we support and that the station supports
-	 * - sort and the rates into the pSta->rate array
-	 */
-
-	/* Copy all rates in temp_rate_set, there are 12 rates max */
-	for (i = 0; i < temp_rate_set2.numRates; i++)
-		temp_rate_set.rate[i + temp_rate_set.numRates] =
-			temp_rate_set2.rate[i];
-
-	temp_rate_set.numRates += temp_rate_set2.numRates;
-
-	/**
-	 * Sort rates in temp_rate_set (they are likely to be already sorted)
-	 * put the result in temp_rate_set2
-	 */
-	temp_rate_set2.numRates = 0;
-
-	for (i = 0; i < temp_rate_set.numRates; i++) {
-		min = 0;
-		val = 0xff;
-
-		for (j = 0; j < temp_rate_set.numRates; j++)
-			if ((uint32_t) (temp_rate_set.rate[j] & 0x7f) < val) {
-				val = temp_rate_set.rate[j] & 0x7f;
-				min = j;
-			}
-
-		temp_rate_set2.rate[temp_rate_set2.numRates++] =
-			temp_rate_set.rate[min];
-		temp_rate_set.rate[min] = 0xff;
-	}
 
 	/**
 	 * Copy received rates in temp_rate_set, the parser has ensured
@@ -2326,27 +2260,22 @@ lim_tdls_populate_matching_rate_set(struct mac_context *mac_ctx,
 	rates = &stads->supportedRates;
 	qdf_mem_zero(rates, sizeof(*rates));
 
-	for (i = 0; i < temp_rate_set2.numRates; i++) {
-		for (j = 0; j < temp_rate_set.numRates; j++) {
-			if ((temp_rate_set2.rate[i] & 0x7F) !=
-				(temp_rate_set.rate[j] & 0x7F))
-				continue;
-
-			if ((b_rateindex > SIR_NUM_11B_RATES) ||
-			    (a_rateindex > SIR_NUM_11A_RATES)) {
-				pe_warn("Invalid number of rates (11b->%d, 11a->%d)",
-					b_rateindex, a_rateindex);
-				return QDF_STATUS_E_FAILURE;
-			}
-			if (sirIsArate(temp_rate_set2.rate[i] & 0x7f)) {
-				is_a_rate = 1;
-				if (a_rateindex < SIR_NUM_11A_RATES)
-					rates->llaRates[a_rateindex++] = temp_rate_set2.rate[i];
-			} else {
-				if (b_rateindex < SIR_NUM_11B_RATES)
-					rates->llbRates[b_rateindex++] = temp_rate_set2.rate[i];
-			}
-			break;
+	for (j = 0; j < temp_rate_set.numRates; j++) {
+		if ((b_rateindex > SIR_NUM_11B_RATES) ||
+		    (a_rateindex > SIR_NUM_11A_RATES)) {
+			pe_warn("Invalid number of rates (11b->%d, 11a->%d)",
+				b_rateindex, a_rateindex);
+			return QDF_STATUS_E_FAILURE;
+		}
+		if (sirIsArate(temp_rate_set.rate[j] & 0x7f)) {
+			is_a_rate = 1;
+			if (a_rateindex < SIR_NUM_11A_RATES)
+				rates->llaRates[a_rateindex++] =
+						temp_rate_set.rate[j];
+		} else {
+			if (b_rateindex < SIR_NUM_11B_RATES)
+				rates->llbRates[b_rateindex++] =
+						temp_rate_set.rate[j];
 		}
 	}
 
@@ -2419,6 +2348,7 @@ static void lim_tdls_update_hash_node_info(struct mac_context *mac,
 	} else if (add_sta_req->tdls_oper == TDLS_OPER_UPDATE) {
 		lim_tdls_populate_dot11f_ht_caps(mac, NULL,
 						 add_sta_req, &htCap);
+		sta->rmfEnabled = add_sta_req->is_pmf;
 	}
 	htCaps = &htCap;
 	if (htCaps->present) {
@@ -2631,20 +2561,11 @@ static QDF_STATUS lim_tdls_del_sta(struct mac_context *mac,
 	sta = dph_lookup_hash_entry(mac, peerMac.bytes, &peerIdx,
 				       &pe_session->dph.dphHashTable);
 
-	if (sta && sta->staType == STA_ENTRY_TDLS_PEER) {
-		pe_debug("DEL STA peer MAC: "QDF_MAC_ADDR_STR,
-			 QDF_MAC_ADDR_ARRAY(sta->staAddr));
-
-		pe_debug("STA type: %x, sta idx: %x resp_reqd: %d",
-			 sta->staType,
-			 sta->staIndex,
-			 resp_reqd);
-
+	if (sta && sta->staType == STA_ENTRY_TDLS_PEER)
 		status = lim_del_sta(mac, sta, resp_reqd, pe_session);
-	} else {
+	else
 		pe_debug("TDLS peer "QDF_MAC_ADDR_STR" not found",
 			 QDF_MAC_ADDR_ARRAY(peerMac.bytes));
-	}
 
 	return status;
 }
@@ -3097,7 +3018,6 @@ static void lim_check_aid_and_delete_peer(struct mac_context *p_mac,
 	 * (with that aid) entry from the hash table and add the aid
 	 * in free pool
 	 */
-	pe_debug("Delete all the TDLS peer connected");
 	for (i = 0; i < aid_bitmap_size / sizeof(uint32_t); i++) {
 		for (aid = 0; aid < (sizeof(uint32_t) << 3); aid++) {
 			if (!CHECK_BIT(session_entry->peerAIDBitmap[i], aid))
@@ -3123,9 +3043,6 @@ static void lim_check_aid_and_delete_peer(struct mac_context *p_mac,
 
 			status = lim_tdls_del_sta(p_mac, mac_addr,
 						  session_entry, false);
-			if (status != QDF_STATUS_SUCCESS)
-				pe_debug("peer " QDF_MAC_ADDR_STR " not found",
-					 QDF_MAC_ADDR_ARRAY(stads->staAddr));
 
 			dph_delete_hash_entry(p_mac,
 				stads->staAddr, stads->assocId,
@@ -3158,7 +3075,6 @@ void lim_update_tdls_set_state_for_fw(struct pe_session *session_entry,
 QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
 				    struct pe_session *session_entry)
 {
-	pe_debug("Enter");
 
 	if (!session_entry) {
 		pe_err("NULL session_entry");
@@ -3185,7 +3101,6 @@ QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
 
 	/* reset the set_state_disable flag */
 	session_entry->tdls_send_set_state_disable = true;
-	pe_debug("Exit");
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -3214,7 +3129,7 @@ QDF_STATUS lim_process_sme_del_all_tdls_peers(struct mac_context *p_mac,
 	session_entry = pe_find_session_by_bssid(p_mac,
 						 msg->bssid.bytes, &session_id);
 	if (!session_entry) {
-		pe_err("NULL pe_session");
+		pe_debug("NULL pe_session");
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -3248,16 +3163,20 @@ void lim_process_tdls_del_sta_rsp(struct mac_context *mac_ctx,
 		return;
 	}
 
+	qdf_mem_copy(peer_mac.bytes,
+		     del_sta_params->staMac, QDF_MAC_ADDR_SIZE);
+
 	sta_ds = dph_lookup_hash_entry(mac_ctx, del_sta_params->staMac,
 			&peer_idx, &session_entry->dph.dphHashTable);
 	if (!sta_ds) {
-		pe_err("DPH Entry for STA: %X is missing",
-			DPH_STA_HASH_INDEX_PEER);
+		pe_err("DPH Entry for STA: %X is missing release the serialization command",
+		       DPH_STA_HASH_INDEX_PEER);
+		lim_send_sme_tdls_del_sta_rsp(mac_ctx,
+					      session_entry->smeSessionId,
+					      peer_mac, NULL,
+					      QDF_STATUS_SUCCESS);
 		goto skip_event;
 	}
-
-	qdf_mem_copy(peer_mac.bytes,
-			del_sta_params->staMac, QDF_MAC_ADDR_SIZE);
 
 	if (QDF_STATUS_SUCCESS != del_sta_params->status) {
 		pe_err("DEL STA failed!");

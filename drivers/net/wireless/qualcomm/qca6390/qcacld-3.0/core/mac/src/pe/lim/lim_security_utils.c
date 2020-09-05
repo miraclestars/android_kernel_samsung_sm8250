@@ -314,6 +314,7 @@ void lim_release_pre_auth_node(struct mac_context *mac,
 		if (assoc->assocReqFrameLength)
 			qdf_mem_free(assoc->assocReqFrame);
 		qdf_mem_free(assoc);
+		pAuthNode->assoc_req.assoc_req = NULL;
 		pAuthNode->assoc_req.present = false;
 	}
 	MTRACE(mac_trace
@@ -362,9 +363,8 @@ void lim_delete_pre_auth_node(struct mac_context *mac, tSirMacAddr macAddr)
 
 		mac->lim.pLimPreAuthList = pTempNode->next;
 
-		pe_debug("first node to delete, Release data entry: %pK id %d peer",
-			       pTempNode, pTempNode->authNodeIdx);
-		lim_print_mac_addr(mac, macAddr, LOGD);
+		pe_debug("fRelease data for %d peer %pM",
+			 pTempNode->authNodeIdx, macAddr);
 		lim_release_pre_auth_node(mac, pTempNode);
 
 		return;

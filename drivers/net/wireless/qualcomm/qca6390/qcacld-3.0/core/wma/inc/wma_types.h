@@ -144,9 +144,6 @@
 
 #define WMA_MISSED_BEACON_IND          SIR_HAL_MISSED_BEACON_IND
 
-#define WMA_ENTER_PS_REQ               SIR_HAL_ENTER_PS_REQ
-#define WMA_EXIT_PS_REQ                SIR_HAL_EXIT_PS_REQ
-
 #define WMA_HIDDEN_SSID_RESTART_RSP    SIR_HAL_HIDDEN_SSID_RESTART_RSP
 #define WMA_SWITCH_CHANNEL_RSP         SIR_HAL_SWITCH_CHANNEL_RSP
 #define WMA_P2P_NOA_ATTR_IND           SIR_HAL_P2P_NOA_ATTR_IND
@@ -173,6 +170,8 @@
 #define WMA_TSM_STATS_REQ              SIR_HAL_TSM_STATS_REQ
 #define WMA_TSM_STATS_RSP              SIR_HAL_TSM_STATS_RSP
 #endif
+
+#define WMA_ROAM_SCAN_CH_REQ              SIR_HAL_ROAM_SCAN_CH_REQ
 
 #define WMA_HT40_OBSS_SCAN_IND                  SIR_HAL_HT40_OBSS_SCAN_IND
 
@@ -233,6 +232,7 @@
 #endif
 
 #define WMA_ROAM_SCAN_OFFLOAD_REQ   SIR_HAL_ROAM_SCAN_OFFLOAD_REQ
+#define WMA_ROAM_PRE_AUTH_STATUS    SIR_HAL_ROAM_PRE_AUTH_STATUS_IND
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 #define WMA_ROAM_OFFLOAD_SYNCH_IND  SIR_HAL_ROAM_OFFLOAD_SYNCH_IND
@@ -414,7 +414,7 @@
 #define WMA_SET_ADAPT_DWELLTIME_CONF_PARAMS  SIR_HAL_SET_ADAPT_DWELLTIME_PARAMS
 
 #define WDA_APF_GET_CAPABILITIES_REQ         SIR_HAL_APF_GET_CAPABILITIES_REQ
-#define WDA_APF_SET_INSTRUCTIONS_REQ         SIR_HAL_APF_SET_INSTRUCTIONS_REQ
+#define WMA_ROAM_SYNC_TIMEOUT                SIR_HAL_WMA_ROAM_SYNC_TIMEOUT
 
 #define WMA_SET_PDEV_IE_REQ                  SIR_HAL_SET_PDEV_IE_REQ
 #define WMA_UPDATE_WEP_DEFAULT_KEY           SIR_HAL_UPDATE_WEP_DEFAULT_KEY
@@ -461,6 +461,9 @@
 #ifdef WLAN_MWS_INFO_DEBUGFS
 #define WMA_GET_MWS_COEX_INFO_REQ	     SIR_HAL_GET_MWS_COEX_INFO_REQ
 #endif
+#define WMA_SET_ROAM_TRIGGERS                SIR_HAL_SET_ROAM_TRIGGERS
+
+#define WMA_ROAM_INIT_PARAM                  SIR_HAL_INIT_ROAM_OFFLOAD_PARAM
 
 /* Bit 6 will be used to control BD rate for Management frames */
 #define HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME 0x40
@@ -725,6 +728,10 @@ QDF_STATUS wma_register_roaming_callbacks(
 			struct roam_offload_synch_ind *roam_synch_data,
 			struct bss_description *bss_desc_ptr,
 			enum sir_roam_op_code reason),
+		QDF_STATUS (*csr_roam_auth_event_handle_cb)(
+			struct mac_context *mac,
+			uint8_t vdev_id,
+			struct qdf_mac_addr bssid),
 		QDF_STATUS (*pe_roam_synch_cb)(struct mac_context *mac,
 			struct roam_offload_synch_ind *roam_synch_data,
 			struct bss_description *bss_desc_ptr,
@@ -732,13 +739,18 @@ QDF_STATUS wma_register_roaming_callbacks(
 		QDF_STATUS (*pe_disconnect_cb) (struct mac_context *mac,
 			uint8_t vdev_id,
 			uint8_t *deauth_disassoc_frame,
-			uint16_t deauth_disassoc_frame_len));
+			uint16_t deauth_disassoc_frame_len,
+			uint16_t reason_code));
 #else
 static inline QDF_STATUS wma_register_roaming_callbacks(
 		QDF_STATUS (*csr_roam_synch_cb)(struct mac_context *mac,
 			struct roam_offload_synch_ind *roam_synch_data,
 			struct bss_description *bss_desc_ptr,
 			enum sir_roam_op_code reason),
+		QDF_STATUS (*csr_roam_auth_event_handle_cb)(
+			struct mac_context *mac,
+			uint8_t vdev_id,
+			struct qdf_mac_addr bssid),
 		QDF_STATUS (*pe_roam_synch_cb)(struct mac_context *mac,
 			struct roam_offload_synch_ind *roam_synch_data,
 			struct bss_description *bss_desc_ptr,
@@ -746,7 +758,8 @@ static inline QDF_STATUS wma_register_roaming_callbacks(
 		QDF_STATUS (*pe_disconnect_cb) (struct mac_context *mac,
 			uint8_t vdev_id,
 			uint8_t *deauth_disassoc_frame,
-			uint16_t deauth_disassoc_frame_len))
+			uint16_t deauth_disassoc_frame_len,
+			uint16_t reason_code));
 {
 	return QDF_STATUS_E_NOSUPPORT;
 }

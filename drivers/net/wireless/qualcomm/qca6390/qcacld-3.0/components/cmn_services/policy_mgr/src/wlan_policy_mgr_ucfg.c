@@ -19,9 +19,6 @@
 #include "wlan_policy_mgr_i.h"
 #include "cfg_ucfg_api.h"
 #include "wlan_policy_mgr_api.h"
-#ifdef SEC_CONFIG_PSM_SYSFS
-extern int wlan_hdd_sec_get_psm(void);
-#endif /* SEC_CONFIG_PSM_SYSFS */
 
 static QDF_STATUS policy_mgr_init_cfg(struct wlan_objmgr_psoc *psoc)
 {
@@ -65,12 +62,9 @@ static QDF_STATUS policy_mgr_init_cfg(struct wlan_objmgr_psoc *psoc)
 		cfg_get(psoc, CFG_ENABLE_SAP_MANDATORY_CHAN_LIST);
 	cfg->mark_indoor_chnl_disable =
 		cfg_get(psoc, CFG_MARK_INDOOR_AS_DISABLE_FEATURE);
-#ifdef SEC_CONFIG_PSM_SYSFS
-	if (wlan_hdd_sec_get_psm()) {
-		cfg->dual_mac_feature = 1;
-		printk("[WIFI] CFG_DUAL_MAC_FEATURE_DISABLE : sec_control_psm = %u", cfg->dual_mac_feature);
-	}
-#endif /* SEC_CONFIG_PSM_SYSFS */
+	cfg->prefer_5g_scc_to_dbs = cfg_get(psoc, CFG_PREFER_5G_SCC_TO_DBS);
+	cfg->go_force_scc = cfg_get(psoc, CFG_P2P_GO_ENABLE_FORCE_SCC);
+
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -194,6 +188,13 @@ ucfg_policy_mgr_get_sta_sap_scc_on_dfs_chnl(struct wlan_objmgr_psoc *psoc,
 {
 	return policy_mgr_get_sta_sap_scc_on_dfs_chnl(psoc,
 						      sta_sap_scc_on_dfs_chnl);
+}
+
+bool
+ucfg_policy_mgr_get_dfs_master_dynamic_enabled(struct wlan_objmgr_psoc *psoc,
+					       uint8_t vdev_id)
+{
+	return policy_mgr_get_dfs_master_dynamic_enabled(psoc, vdev_id);
 }
 
 QDF_STATUS

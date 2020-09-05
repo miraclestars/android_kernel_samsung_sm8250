@@ -78,6 +78,19 @@ QDF_STATUS hdd_init_tx_rx(struct hdd_adapter *adapter);
 QDF_STATUS hdd_deinit_tx_rx(struct hdd_adapter *adapter);
 
 /**
+ * hdd_rx_flush_packet_cbk() - flush rx packet handler
+ * @adapter_context: pointer to HDD adapter context
+ * @vdev_id: vdev_id of the packets to be flushed
+ *
+ * Flush rx packet callback registered with data path. DP will call this to
+ * notify HDD when packets for a particular vdev is to be flushed out.
+ *
+ * Return: QDF_STATUS_E_FAILURE if any errors encountered,
+ *	   QDF_STATUS_SUCCESS otherwise
+ */
+QDF_STATUS hdd_rx_flush_packet_cbk(void *adapter_context, uint8_t vdev_id);
+
+/**
  * hdd_rx_packet_cbk() - Receive packet handler
  * @adapter_context: pointer to HDD adapter context
  * @rxBuf: pointer to rx qdf_nbuf
@@ -303,7 +316,14 @@ void wlan_hdd_classify_pkt(struct sk_buff *skb);
 
 #ifdef WLAN_FEATURE_DP_BUS_BANDWIDTH
 void hdd_reset_tcp_delack(struct hdd_context *hdd_ctx);
+#ifdef RX_PERFORMANCE
 bool hdd_is_current_high_throughput(struct hdd_context *hdd_ctx);
+#else
+static inline bool hdd_is_current_high_throughput(struct hdd_context *hdd_ctx)
+{
+	return false;
+}
+#endif
 #define HDD_MSM_CFG(msm_cfg)	msm_cfg
 #else
 static inline void hdd_reset_tcp_delack(struct hdd_context *hdd_ctx) {}
@@ -414,4 +434,14 @@ void hdd_print_netdev_txq_status(struct net_device *dev);
 uint32_t
 wlan_hdd_dump_queue_history_state(struct hdd_netif_queue_history *q_hist,
 				  char *buf, uint32_t size);
+
+/**
+ * wlan_hdd_rx_rpm_mark_last_busy() - Check if dp rx marked last busy
+ * @hdd_ctx: Pointer to hdd context
+ * @hif_ctx: Pointer to hif context
+ *
+ * Return: dp mark last busy less than runtime delay value
+ */
+bool wlan_hdd_rx_rpm_mark_last_busy(struct hdd_context *hdd_ctx,
+				    void *hif_ctx);
 #endif /* end #if !defined(WLAN_HDD_TX_RX_H) */

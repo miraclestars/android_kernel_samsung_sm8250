@@ -388,7 +388,7 @@ void ipa_uc_force_pipe_shutdown(struct wlan_objmgr_pdev *pdev)
 		return;
 	}
 
-	wlan_ipa_uc_disable_pipes(ipa_obj);
+	wlan_ipa_uc_disable_pipes(ipa_obj, true);
 }
 
 void ipa_flush(struct wlan_objmgr_pdev *pdev)
@@ -462,6 +462,20 @@ QDF_STATUS ipa_uc_ol_init(struct wlan_objmgr_pdev *pdev,
 	}
 
 	return wlan_ipa_uc_ol_init(ipa_obj, osdev);
+}
+
+bool ipa_is_tx_pending(struct wlan_objmgr_pdev *pdev)
+{
+	struct wlan_ipa_priv *ipa_obj;
+
+	if (!ipa_config_is_enabled()) {
+		ipa_debug("ipa is disabled");
+		return QDF_STATUS_SUCCESS;
+	}
+
+	ipa_obj = ipa_pdev_get_priv_obj(pdev);
+
+	return wlan_ipa_is_tx_pending(ipa_obj);
 }
 
 QDF_STATUS ipa_uc_ol_deinit(struct wlan_objmgr_pdev *pdev)
@@ -539,6 +553,20 @@ bool ipa_is_fw_wdi_activated(struct wlan_objmgr_pdev *pdev)
 	}
 
 	return wlan_ipa_is_fw_wdi_activated(ipa_obj);
+}
+
+void ipa_uc_cleanup_sta(struct wlan_objmgr_pdev *pdev,
+			qdf_netdev_t net_dev)
+{
+	struct wlan_ipa_priv *ipa_obj;
+
+	ipa_obj = ipa_pdev_get_priv_obj(pdev);
+	if (!ipa_obj) {
+		ipa_err("IPA object is NULL");
+		return;
+	}
+
+	return wlan_ipa_uc_cleanup_sta(ipa_obj, net_dev);
 }
 
 QDF_STATUS ipa_uc_disconnect_ap(struct wlan_objmgr_pdev *pdev,
@@ -621,9 +649,28 @@ void ipa_component_config_update(struct wlan_objmgr_psoc *psoc)
 		cfg_get(psoc, CFG_DP_BUS_BANDWIDTH_MEDIUM_THRESHOLD);
 	g_ipa_config->bus_bw_low =
 		cfg_get(psoc, CFG_DP_BUS_BANDWIDTH_LOW_THRESHOLD);
+	g_ipa_config->ipa_force_voting =
+		cfg_get(psoc, CFG_DP_IPA_ENABLE_FORCE_VOTING);
 }
 
 uint32_t ipa_get_tx_buf_count(void)
 {
 	return g_ipa_config ? g_ipa_config->txbuf_count : 0;
+}
+
+void ipa_update_tx_stats(struct wlan_objmgr_pdev *pdev, uint64_t sta_tx,
+			 uint64_t ap_tx)
+{
+	struct wlan_ipa_priv *ipa_obj;
+
+	if (!ipa_config_is_enabled())
+		return;
+
+	ipa_obj = ipa_pdev_get_priv_obj(pdev);
+	if (!ipa_obj) {
+		ipa_err("IPA object is NULL");
+		return;
+	}
+
+	wlan_ipa_update_tx_stats(ipa_obj, sta_tx, ap_tx);
 }

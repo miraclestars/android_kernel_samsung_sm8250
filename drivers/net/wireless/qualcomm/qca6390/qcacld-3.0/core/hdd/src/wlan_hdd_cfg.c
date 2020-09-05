@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -239,16 +239,13 @@ QDF_STATUS hdd_update_mac_config(struct hdd_context *hdd_ctx)
 	QDF_STATUS qdf_status = QDF_STATUS_SUCCESS;
 
 	memset(mac_table, 0, sizeof(mac_table));
-	status = request_firmware_direct(&fw,
-					 WLAN_MAC_FILE,
-					 hdd_ctx->parent_dev);
+	status = request_firmware(&fw, WLAN_MAC_FILE, hdd_ctx->parent_dev);
 	if (status) {
 		/*
-		 * request_firmware_direct "fails" if the file is not found,
-		 * which is a valid setup for us, so log using debug instead
-		 * of error
+		 * request_firmware "fails" if the file is not found, which is a
+		 * valid setup for us, so log using debug instead of error
 		 */
-		hdd_debug("request_firmware_direct failed; status:%d", status);
+		hdd_debug("request_firmware failed; status:%d", status);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -449,7 +446,7 @@ QDF_STATUS hdd_set_idle_ps_config(struct hdd_context *hdd_ctx, bool val)
 	}
 
 	if (hdd_ctx->imps_enabled == val) {
-		hdd_info("Already in the requested power state:%d", val);
+		hdd_nofl_debug("Already in the requested power state:%d", val);
 		return QDF_STATUS_SUCCESS;
 	}
 
@@ -836,7 +833,7 @@ QDF_STATUS hdd_set_sme_config(struct hdd_context *hdd_ctx)
 	 */
 	sme_config->csr_config.phyMode =
 		hdd_cfg_xlate_to_csr_phy_mode(config->dot11Mode);
-
+	sme_update_nud_config(mac_handle, config->enable_nud_tracking);
 	if (config->dot11Mode == eHDD_DOT11_MODE_abg ||
 	    config->dot11Mode == eHDD_DOT11_MODE_11b ||
 	    config->dot11Mode == eHDD_DOT11_MODE_11g ||
@@ -867,7 +864,6 @@ QDF_STATUS hdd_set_sme_config(struct hdd_context *hdd_ctx)
 						&enable_dfs_scan);
 	sme_config->csr_config.fEnableDFSChnlScan = enable_dfs_scan;
 	sme_config->csr_config.Csr11dinfo.Channels.numChannels = 0;
-
 	hdd_set_power_save_offload_config(hdd_ctx);
 
 #ifdef FEATURE_WLAN_ESE

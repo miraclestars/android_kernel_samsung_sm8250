@@ -86,8 +86,8 @@ struct reassoc_params {
 #define MAX_BSS_COLOR_VALUE 63
 #define TIME_BEACON_NOT_UPDATED 30000
 #define BSS_COLOR_SWITCH_COUNTDOWN 5
-#define OBSS_COLOR_COLLISION_DETECTION_STA_PERIOD_MS 10000
-#define OBSS_COLOR_COLLISION_DETECTION_AP_PERIOD_MS 60000
+#define OBSS_COLOR_COLLISION_DETECTION_STA_PERIOD_MS 120000
+#define OBSS_COLOR_COLLISION_DETECTION_AP_PERIOD_MS 120000
 #define OBSS_COLOR_COLLISION_SCAN_PERIOD_MS 200
 #define OBSS_COLOR_COLLISION_FREE_SLOT_EXPIRY_MS 50000
 struct bss_color_info {
@@ -132,6 +132,8 @@ struct obss_detection_cfg {
  * @vdev: the actual vdev for which this entry is applicable
  * @connected_akm: AKM of current connection
  * @is_adaptive_11R_connection: flag to check if we are connecting
+ * @ap_ecsa_wakelock: wakelock to complete CSA operation.
+ * @ap_ecsa_runtime_lock: runtime lock to complete SAP CSA operation.
  * to Adaptive 11R network
  */
 struct pe_session {
@@ -157,7 +159,6 @@ struct pe_session {
 	tLimSmeStates limPrevSmeState;  /* Previous SME State */
 	tLimSystemRole limSystemRole;
 	enum bss_type bssType;
-	uint8_t operMode;       /* AP - 0; STA - 1 ; */
 	tSirNwType nwType;
 	struct start_bss_req *pLimStartBssReq; /* handle to start bss req */
 	struct join_req *lim_join_req;    /* handle to sme join req */
@@ -315,6 +316,7 @@ struct pe_session {
 	uint8_t lim11dEnabled:1;
 #ifdef WLAN_FEATURE_11W
 	uint8_t limRmfEnabled:1;        /* 11W */
+	tAniEdType mgmt_cipher_type;
 #endif
 	uint32_t lim11hEnable;
 
@@ -492,6 +494,8 @@ struct pe_session {
 	qdf_mc_timer_t protection_fields_reset_timer;
 	/* timer to decrement CSA/ECSA count */
 	qdf_mc_timer_t ap_ecsa_timer;
+	qdf_wake_lock_t ap_ecsa_wakelock;
+	qdf_runtime_lock_t ap_ecsa_runtime_lock;
 	struct mac_context *mac_ctx;
 	/*
 	 * variable to store state of various protection struct like
@@ -619,7 +623,8 @@ static inline void pe_free_dph_node_array_buffer(void)
  * @sessionId: PE session ID is returned here, if PE session is created.
  * @numSta: number of stations
  * @bssType: bss type of new session to do conditional memory allocation.
- * @sme_session_id: sme session identifier
+ * @vdev_id: vdev_id
+ * @opmode: operating mode
  *
  * This function returns the session context and the session ID if the session
  * corresponding to the passed BSSID is found in the PE session table.
@@ -627,10 +632,9 @@ static inline void pe_free_dph_node_array_buffer(void)
  * Return: ptr to the session context or NULL if session can not be created.
  */
 struct pe_session *pe_create_session(struct mac_context *mac,
-			      uint8_t *bssid,
-			      uint8_t *sessionId,
-			      uint16_t numSta, enum bss_type bssType,
-			      uint8_t sme_session_id);
+				     uint8_t *bssid, uint8_t *sessionId,
+				     uint16_t numSta, enum bss_type bssType,
+				     uint8_t vdev_id, enum QDF_OPMODE opmode);
 
 /**
  * pe_find_session_by_bssid() - looks up the PE session given the BSSID.

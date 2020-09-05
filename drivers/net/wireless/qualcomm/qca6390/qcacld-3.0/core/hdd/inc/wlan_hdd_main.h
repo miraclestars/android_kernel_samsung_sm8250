@@ -105,6 +105,7 @@
 #include "wlan_hdd_twt.h"
 #include "wma_sar_public_structs.h"
 #include "wlan_mlme_ucfg_api.h"
+#include "pld_common.h"
 
 #ifdef WLAN_FEATURE_DP_BUS_BANDWIDTH
 #include "qdf_periodic_work.h"
@@ -186,6 +187,9 @@ static inline bool in_compat_syscall(void) { return is_compat_task(); }
 #define NUM_CPUS 1
 #endif
 
+#define ACS_COMPLETE_TIMEOUT 3000
+
+#define HDD_PSOC_IDLE_SHUTDOWN_SUSPEND_DELAY (1000)
 /**
  * enum hdd_adapter_flags - event bitmap flags registered net device
  * @NET_DEVICE_REGISTERED: Adapter is registered with the kernel
@@ -194,7 +198,6 @@ static inline bool in_compat_syscall(void) { return is_compat_task(); }
  * @WMM_INIT_DONE: Adapter is initialized
  * @SOFTAP_BSS_STARTED: Software Access Point (SAP) is running
  * @DEVICE_IFACE_OPENED: Adapter has been "opened" via the kernel
- * @ACS_PENDING: Auto Channel Selection (ACS) is pending
  * @SOFTAP_INIT_DONE: Software Access Point (SAP) is initialized
  * @VENDOR_ACS_RESPONSE_PENDING: Waiting for event for vendor acs
  * @DOWN_DURING_SSR: Mark interface is down during SSR
@@ -206,18 +209,9 @@ enum hdd_adapter_flags {
 	WMM_INIT_DONE,
 	SOFTAP_BSS_STARTED,
 	DEVICE_IFACE_OPENED,
-	ACS_PENDING,
 	SOFTAP_INIT_DONE,
 	VENDOR_ACS_RESPONSE_PENDING,
 	DOWN_DURING_SSR,
-};
-
-/**
- * enum hdd_driver_flags - HDD global event bitmap flags
- * @ACS_IN_PROGRESS: Auto Channel Selection (ACS) in progress
- */
-enum hdd_driver_flags {
-	ACS_IN_PROGRESS,
 };
 
 #define WLAN_WAIT_DISCONNECT_ALREADY_IN_PROGRESS  1000
@@ -245,6 +239,8 @@ enum hdd_driver_flags {
 
 /* rcpi request timeout in milli seconds */
 #define WLAN_WAIT_TIME_RCPI 500
+
+#define WLAN_WAIT_PEER_CLEANUP 5000
 
 #define MAX_CFG_STRING_LEN  255
 
@@ -390,6 +386,8 @@ enum hdd_driver_flags {
 
 #define NUM_TX_RX_HISTOGRAM_MASK (NUM_TX_RX_HISTOGRAM - 1)
 
+#define HDD_NOISE_FLOOR_DBM (-96)
+
 /**
  * enum hdd_auth_key_mgmt - auth key mgmt protocols
  * @HDD_AUTH_KEY_MGMT_802_1X: 802.1x
@@ -452,6 +450,8 @@ struct hdd_tx_rx_stats {
 	__u32 rx_aggregated;
 	__u32 rx_gro_dropped;
 	__u32 rx_non_aggregated;
+	__u32 rx_gro_flush_skip;
+	__u32 rx_gro_low_tput_flush;
 
 	/* txflow stats */
 	bool     is_txflow_paused;
@@ -798,7 +798,7 @@ struct hdd_rate_info {
 	uint8_t mode;
 	uint8_t nss;
 	uint8_t mcs;
-	uint8_t rate_flags;
+	enum tx_rate_info rate_flags;
 };
 
 /**
@@ -808,9 +808,11 @@ struct hdd_rate_info {
  * @tx_bytes: bytes transmitted to this station
  * @rx_packets: packets received from this station
  * @rx_bytes: bytes received from this station
- * @rx_retries: cumulative retry counts
- * @tx_failed: number of failed transmissions
+ * @tx_retries: cumulative retry counts
+ * @tx_failed: the number of failed frames
+ * @tx_succeed: the number of succeed frames
  * @rssi: The signal strength (dbm)
+ * @peer_rssi_per_chain: the average value of RSSI (dbm) per chain
  * @tx_rate: last used tx rate info
  * @rx_rate: last used rx rate info
  *
@@ -823,7 +825,9 @@ struct hdd_fw_txrx_stats {
 	uint64_t rx_bytes;
 	uint32_t tx_retries;
 	uint32_t tx_failed;
+	uint32_t tx_succeed;
 	int8_t rssi;
+	int32_t peer_rssi_per_chain[WMI_MAX_CHAINS];
 	struct hdd_rate_info tx_rate;
 	struct hdd_rate_info rx_rate;
 };
@@ -871,7 +875,7 @@ enum dhcp_nego_status {
  * @rate_flags: Rate Flags for this connection
  * @ecsa_capable: Extended CSA capabilities
  * @max_phy_rate: Calcuated maximum phy rate based on mode, nss, mcs etc.
- * @tx_packets: Packets send to current station
+ * @tx_packets: The number of frames from host to firmware
  * @tx_bytes: Bytes send to current station
  * @rx_packets: Packets received from current station
  * @rx_bytes: Bytes received from current station
@@ -908,6 +912,18 @@ enum dhcp_nego_status {
  * MSB of rx_mc_bc_cnt indicates whether FW supports rx_mc_bc_cnt
  * feature or not, if first bit is 1 it indicates that FW supports this
  * feature, if it is 0 it indicates FW doesn't support this feature
+ * @tx_failed: the number of tx failed frames
+ * @peer_rssi_per_chain: the average value of RSSI (dbm) per chain
+ * @tx_retry_succeed: the number of frames retried but successfully transmit
+ * @rx_last_pkt_rssi: the rssi (dbm) calculate by last packet
+ * @tx_retry: the number of retried frames from host to firmware
+ * @tx_retry_exhaust: the number of frames retried but finally failed
+ *                    from host to firmware
+ * @tx_total_fw: the number of all frames from firmware to remote station
+ * @tx_retry_fw: the number of retried frames from firmware to remote station
+ * @tx_retry_exhaust_fw: the number of frames retried but finally failed from
+ *                    firmware to remote station
+ * @assoc_req_ies: Assoc request IEs of the peer station
  */
 struct hdd_station_info {
 	bool in_use;
@@ -955,6 +971,16 @@ struct hdd_station_info {
 	uint8_t support_mode;
 	uint32_t rx_retry_cnt;
 	uint32_t rx_mc_bc_cnt;
+	uint32_t tx_failed;
+	uint32_t peer_rssi_per_chain[WMI_MAX_CHAINS];
+	uint32_t tx_retry_succeed;
+	uint32_t rx_last_pkt_rssi;
+	uint32_t tx_retry;
+	uint32_t tx_retry_exhaust;
+	uint32_t tx_total_fw;
+	uint32_t tx_retry_fw;
+	uint32_t tx_retry_exhaust_fw;
+	struct wlan_ies assoc_req_ies;
 };
 
 /**
@@ -1063,12 +1089,15 @@ struct hdd_chan_change_params {
  * struct hdd_runtime_pm_context - context to prevent/allow runtime pm
  * @dfs: dfs context to prevent/allow runtime pm
  * @connect: connect context to prevent/allow runtime pm
+ * @user: user context to prevent/allow runtime pm
  *
  * Runtime PM control for underlying activities
  */
 struct hdd_runtime_pm_context {
 	qdf_runtime_lock_t dfs;
 	qdf_runtime_lock_t connect;
+	qdf_runtime_lock_t user;
+	bool is_user_wakelock_acquired;
 };
 
 /*
@@ -1112,6 +1141,10 @@ struct hdd_context;
  * @vdev_lock: lock to protect vdev context access
  * @vdev_id: Unique identifier assigned to the vdev
  * @event_flags: a bitmap of hdd_adapter_flags
+ * @latency_level: 0 - normal, 1 - moderate, 2 - low, 3 - ultralow
+ * @acs_complete_event: acs complete event
+ * @last_disconnect_reason: Last disconnected internal reason code
+ *                          as per enum qca_disconnect_reason_codes
  */
 struct hdd_adapter {
 	/* Magic cookie for adapter sanity verification.  Note that this
@@ -1177,6 +1210,7 @@ struct hdd_adapter {
 
 	/* QDF event for session open */
 	qdf_event_t qdf_session_open_event;
+	qdf_event_t acs_complete_event;
 
 	/* TODO: move these to sta ctx. These may not be used in AP */
 	/** completion variable for disconnect callback */
@@ -1290,7 +1324,7 @@ struct hdd_adapter {
 	bool offloads_configured;
 
 	/* DSCP to UP QoS Mapping */
-	enum sme_qos_wmmuptype dscp_to_up_map[WLAN_HDD_MAX_DSCP + 1];
+	enum sme_qos_wmmuptype dscp_to_up_map[WLAN_MAX_DSCP + 1];
 
 #ifdef WLAN_FEATURE_LINK_LAYER_STATS
 	bool is_link_layer_stats_set;
@@ -1345,6 +1379,7 @@ struct hdd_adapter {
 	uint32_t track_dest_ipv4;
 	uint32_t mon_chan;
 	uint32_t mon_bandwidth;
+	uint16_t latency_level;
 
 	/* rcpi information */
 	struct rcpi_info rcpi;
@@ -1360,6 +1395,16 @@ struct hdd_adapter {
 #ifdef WLAN_FEATURE_MOTION_DETECTION
 	bool motion_detection_mode;
 #endif /* WLAN_FEATURE_MOTION_DETECTION */
+	enum qca_disconnect_reason_codes last_disconnect_reason;
+
+#ifdef WLAN_FEATURE_PERIODIC_STA_STATS
+	/* Indicate whether to display sta periodic stats */
+	bool is_sta_periodic_stats_enabled;
+	uint16_t periodic_stats_timer_count;
+	uint32_t periodic_stats_timer_counter;
+	qdf_mutex_t sta_periodic_stats_lock;
+#endif /* WLAN_FEATURE_PERIODIC_STA_STATS */
+	qdf_event_t peer_cleanup_done;
 };
 
 #define WLAN_HDD_GET_STATION_CTX_PTR(adapter) (&(adapter)->session.station)
@@ -1621,6 +1666,8 @@ struct hdd_fw_ver_info {
  * struct hdd_context - hdd shared driver and psoc/device context
  * @psoc: object manager psoc context
  * @pdev: object manager pdev context
+ * @iftype_data_2g: Interface data for 2g band
+ * @iftype_data_5g: Interface data for 5g band
  * @bus_bw_work: work for periodically computing DDR bus bandwidth requirements
  * @g_event_flags: a bitmap of hdd_driver_flags
  * @psoc_idle_timeout_work: delayed work for psoc idle shutdown
@@ -1652,6 +1699,11 @@ struct hdd_context {
 	/* Pointer for wiphy 2G/5G band channels */
 	struct ieee80211_channel *channels_2ghz;
 	struct ieee80211_channel *channels_5ghz;
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+	struct ieee80211_sband_iftype_data *iftype_data_2g;
+	struct ieee80211_sband_iftype_data *iftype_data_5g;
+#endif
 
 	/* Completion  variable to indicate Mc Thread Suspended */
 	struct completion mc_sus_event_var;
@@ -1696,7 +1748,7 @@ struct hdd_context {
 #ifdef WLAN_FEATURE_DP_BUS_BANDWIDTH
 	struct qdf_periodic_work bus_bw_work;
 	int cur_vote_level;
-	spinlock_t bus_bw_lock;
+	qdf_spinlock_t bus_bw_lock;
 	int cur_rx_level;
 	uint64_t prev_no_rx_offload_pkts;
 	uint64_t prev_rx_offload_pkts;
@@ -1704,6 +1756,8 @@ struct hdd_context {
 	uint64_t prev_tx_offload_pkts;
 	int cur_tx_level;
 	uint64_t prev_tx;
+	qdf_atomic_t low_tput_gro_enable;
+	uint32_t bus_low_vote_cnt;
 #endif /*WLAN_FEATURE_DP_BUS_BANDWIDTH*/
 
 	struct completion ready_to_suspend;
@@ -1771,6 +1825,11 @@ struct hdd_context {
 	/* IPv4 notifier callback for handling ARP offload on change in IP */
 	struct notifier_block ipv4_notifier;
 
+#ifdef FEATURE_RUNTIME_PM
+	struct notifier_block pm_qos_notifier;
+	bool runtime_pm_prevented;
+	qdf_spinlock_t pm_qos_lock;
+#endif
 	/* number of rf chains supported by target */
 	uint32_t  num_rf_chains;
 	/* Is htTxSTBC supported by target */
@@ -1884,6 +1943,7 @@ struct hdd_context {
 	struct board_info hw_bd_info;
 #ifdef WLAN_SUPPORT_TWT
 	enum twt_status twt_state;
+	qdf_event_t twt_disable_comp_evt;
 #endif
 #ifdef FEATURE_WLAN_APF
 	uint32_t apf_version;
@@ -1910,6 +1970,9 @@ struct hdd_context {
 #ifdef CLD_PM_QOS
 	struct pm_qos_request pm_qos_req;
 #endif
+	qdf_time_t runtime_resume_start_time_stamp;
+	qdf_time_t runtime_suspend_done_time_stamp;
+	bool roam_ch_from_fw_supported;
 };
 
 /**
@@ -1987,31 +2050,137 @@ struct hdd_channel_info {
 /*
  * Function declarations and documentation
  */
-#ifdef SEC_CONFIG_PSM_SYSFS
-int wlan_hdd_sec_get_psm(void);
-#endif /* SEC_CONFIG_PSM_SYSFS */
+
 int hdd_validate_channel_and_bandwidth(struct hdd_adapter *adapter,
 				uint32_t chan_number,
 				enum phy_ch_width chan_bw);
 
+/**
+ * hdd_get_front_adapter() - Get the first adapter from the adapter list
+ * @hdd_ctx: pointer to the HDD context
+ * @current_adapter: pointer to the current adapter
+ * @out_adapter: double pointer to pass the next adapter
+ *
+ * Return: QDF_STATUS
+ */
 QDF_STATUS hdd_get_front_adapter(struct hdd_context *hdd_ctx,
 				 struct hdd_adapter **out_adapter);
 
+/**
+ * hdd_get_next_adapter() - Get the next adapter from the adapter list
+ * @hdd_ctx: pointer to the HDD context
+ * @current_adapter: pointer to the current adapter
+ * @out_adapter: double pointer to pass the next adapter
+ *
+ * Return: QDF_STATUS
+ */
 QDF_STATUS hdd_get_next_adapter(struct hdd_context *hdd_ctx,
 				struct hdd_adapter *current_adapter,
 				struct hdd_adapter **out_adapter);
 
+/**
+ * hdd_get_front_adapter_no_lock() - Get the first adapter from the adapter list
+ * This API doesnot use any lock in it's implementation. It is the caller's
+ * directive to ensure concurrency safety.
+ * @hdd_ctx: pointer to the HDD context
+ * @out_adapter: double pointer to pass the next adapter
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS hdd_get_front_adapter_no_lock(struct hdd_context *hdd_ctx,
+					 struct hdd_adapter **out_adapter);
+
+/**
+ * hdd_get_next_adapter_no_lock() - Get the next adapter from the adapter list
+ * This API doesnot use any lock in it's implementation. It is the caller's
+ * directive to ensure concurrency safety.
+ * @hdd_ctx: pointer to the HDD context
+ * @current_adapter: pointer to the current adapter
+ * @out_adapter: double pointer to pass the next adapter
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS hdd_get_next_adapter_no_lock(struct hdd_context *hdd_ctx,
+					struct hdd_adapter *current_adapter,
+					struct hdd_adapter **out_adapter);
+
+/**
+ * hdd_remove_adapter() - Remove the adapter from the adapter list
+ * @hdd_ctx: pointer to the HDD context
+ * @adapter: pointer to the adapter to be removed
+ *
+ * Return: QDF_STATUS
+ */
 QDF_STATUS hdd_remove_adapter(struct hdd_context *hdd_ctx,
 			      struct hdd_adapter *adapter);
 
+/**
+ * hdd_remove_front_adapter() - Remove the first adapter from the adapter list
+ * @hdd_ctx: pointer to the HDD context
+ * @out_adapter: pointer to the adapter to be removed
+ *
+ * Return: QDF_STATUS
+ */
 QDF_STATUS hdd_remove_front_adapter(struct hdd_context *hdd_ctx,
 				    struct hdd_adapter **out_adapter);
 
+/**
+ * hdd_add_adapter_back() - Add an adapter to the adapter list
+ * @hdd_ctx: pointer to the HDD context
+ * @adapter: pointer to the adapter to be added
+ *
+ * Return: QDF_STATUS
+ */
 QDF_STATUS hdd_add_adapter_back(struct hdd_context *hdd_ctx,
 				struct hdd_adapter *adapter);
 
+/**
+ * hdd_add_adapter_front() - Add an adapter to the head of the adapter list
+ * @hdd_ctx: pointer to the HDD context
+ * @adapter: pointer to the adapter to be added
+ *
+ * Return: QDF_STATUS
+ */
 QDF_STATUS hdd_add_adapter_front(struct hdd_context *hdd_ctx,
 				 struct hdd_adapter *adapter);
+
+/**
+ * typedef hdd_adapter_iterate_cb() – Iteration callback function
+ * @adapter: current adapter of interest
+ * @context: user context supplied to the iterator
+ *
+ * This specifies the type of a callback function to supply to
+ * hdd_adapter_iterate().
+ *
+ * Return:
+ * * QDF_STATUS_SUCCESS if further iteration should continue
+ * * QDF_STATUS_E_ABORTED if further iteration should be aborted
+ */
+typedef QDF_STATUS (*hdd_adapter_iterate_cb)(struct hdd_adapter *adapter,
+					     void *context);
+
+/**
+ * hdd_adapter_iterate() – Safely iterate over all adapters
+ * @cb: callback function to invoke for each adapter
+ * @context: user-supplied context to pass to @cb
+ *
+ * This function will iterate over all of the adapters known to the system in
+ * a safe manner, invoking the callback function for each adapter.
+ * The callback function will be invoked in the same context/thread as the
+ * caller without any additional locks in force.
+ * Iteration continues until either the callback has been invoked for all
+ * adapters or a callback returns a value of QDF_STATUS_E_ABORTED to indicate
+ * that further iteration should cease.
+ *
+ * Return:
+ * * QDF_STATUS_E_ABORTED if any callback function returns that value
+ * * QDF_STATUS_E_FAILURE if the callback was not invoked for all adapters due
+ * to concurrency (i.e. adapter was deleted while iterating)
+ * * QDF_STATUS_SUCCESS if @cb was invoked for each adapter and none returned
+ * an error
+ */
+QDF_STATUS hdd_adapter_iterate(hdd_adapter_iterate_cb cb,
+			       void *context);
 
 /**
  * hdd_for_each_adapter - adapter iterator macro
@@ -2022,6 +2191,76 @@ QDF_STATUS hdd_add_adapter_front(struct hdd_context *hdd_ctx,
 	for (hdd_get_front_adapter(hdd_ctx, &adapter); \
 	     adapter; \
 	     hdd_get_next_adapter(hdd_ctx, adapter, &adapter))
+
+/**
+ * __hdd_take_ref_and_fetch_front_adapter - Helper macro to lock, fetch front
+ * adapter, take ref and unlock.
+ * @hdd_ctx: the global HDD context
+ * @adapter: an hdd_adapter pointer to use as a cursor
+ */
+#define __hdd_take_ref_and_fetch_front_adapter(hdd_ctx, adapter) \
+	qdf_spin_lock_bh(&hdd_ctx->hdd_adapter_lock), \
+	hdd_get_front_adapter_no_lock(hdd_ctx, &adapter), \
+	(adapter) ? dev_hold(adapter->dev) : (false), \
+	qdf_spin_unlock_bh(&hdd_ctx->hdd_adapter_lock)
+
+/**
+ * __hdd_take_ref_and_fetch_next_adapter - Helper macro to lock, fetch next
+ * adapter, take ref and unlock.
+ * @hdd_ctx: the global HDD context
+ * @adapter: an hdd_adapter pointer to use as a cursor
+ */
+#define __hdd_take_ref_and_fetch_next_adapter(hdd_ctx, adapter) \
+	qdf_spin_lock_bh(&hdd_ctx->hdd_adapter_lock), \
+	hdd_get_next_adapter_no_lock(hdd_ctx, adapter, &adapter), \
+	(adapter) ? dev_hold(adapter->dev) : (false), \
+	qdf_spin_unlock_bh(&hdd_ctx->hdd_adapter_lock)
+
+/**
+ * __hdd_is_adapter_valid - Helper macro to return true/false for valid adapter.
+ * @adapter: an hdd_adapter pointer to use as a cursor
+ */
+#define __hdd_is_adapter_valid(_adapter) !!_adapter
+
+/**
+ * hdd_for_each_adapter_dev_held - Adapter iterator with dev_hold called
+ * @hdd_ctx: the global HDD context
+ * @adapter: an hdd_adapter pointer to use as a cursor
+ *
+ * This iterator will take the reference of the netdev associated with the
+ * given adapter so as to prevent it from being removed in other context.
+ * If the control goes inside the loop body then the dev_hold has been invoked.
+ *
+ *                           ***** NOTE *****
+ * Before the end of each iteration, dev_put(adapter->dev) must be
+ * called. Not calling this will keep hold of a reference, thus preventing
+ * unregister of the netdevice.
+ *
+ * Usage example:
+ *                 hdd_for_each_adapter_dev_held(hdd_ctx, adapter) {
+ *                         <work involving adapter>
+ *                         <some more work>
+ *                         dev_put(adapter->dev)
+ *                 }
+ */
+#define hdd_for_each_adapter_dev_held(hdd_ctx, adapter) \
+	for (__hdd_take_ref_and_fetch_front_adapter(hdd_ctx, adapter); \
+	     __hdd_is_adapter_valid(adapter); \
+	     __hdd_take_ref_and_fetch_next_adapter(hdd_ctx, adapter))
+
+/**
+ * wlan_hdd_get_adapter_by_vdev_id_from_objmgr() - Fetch adapter from objmgr
+ * using vdev_id.
+ * @hdd_ctx: the global HDD context
+ * @adapter: an hdd_adapter double pointer to store the address of the adapter
+ * @vdev: the vdev whose corresponding adapter has to be fetched
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_hdd_get_adapter_by_vdev_id_from_objmgr(struct hdd_context *hdd_ctx,
+					    struct hdd_adapter **adapter,
+					    struct wlan_objmgr_vdev *vdev);
 
 struct hdd_adapter *hdd_open_adapter(struct hdd_context *hdd_ctx,
 				     uint8_t session_type,
@@ -2067,6 +2306,30 @@ QDF_STATUS hdd_start_all_adapters(struct hdd_context *hdd_ctx);
  */
 struct hdd_adapter *hdd_get_adapter_by_vdev(struct hdd_context *hdd_ctx,
 					    uint32_t vdev_id);
+
+/**
+ * hdd_adapter_get_by_reference() - Return adapter with the given reference
+ * @hdd_ctx: hdd context
+ * @reference: reference for the adapter to get
+ *
+ * This function is used to get the adapter with provided reference.
+ * The adapter reference will be held until being released by calling
+ * hdd_adapter_put().
+ *
+ * Return: adapter pointer if found
+ *
+ */
+struct hdd_adapter *hdd_adapter_get_by_reference(struct hdd_context *hdd_ctx,
+						 struct hdd_adapter *reference);
+
+/**
+ * hdd_adapter_put() - Release reference to adapter
+ * @adapter: adapter reference
+ *
+ * Release reference to adapter previously acquired via
+ * hdd_adapter_get_*() function
+ */
+void hdd_adapter_put(struct hdd_adapter *adapter);
 
 struct hdd_adapter *hdd_get_adapter_by_macaddr(struct hdd_context *hdd_ctx,
 					       tSirMacAddr mac_addr);
@@ -2242,6 +2505,27 @@ QDF_STATUS __wlan_hdd_validate_mac_address(struct qdf_mac_addr *mac_addr,
 
 #ifdef WLAN_FEATURE_DP_BUS_BANDWIDTH
 /**
+ * hdd_bus_bw_compute_prev_txrx_stats() - get tx and rx stats
+ * @adapter: hdd adapter reference
+ *
+ * This function get the collected tx and rx stats before starting
+ * the bus bandwidth timer.
+ *
+ * Return: None
+ */
+void hdd_bus_bw_compute_prev_txrx_stats(struct hdd_adapter *adapter);
+
+/**
+ * hdd_bus_bw_compute_reset_prev_txrx_stats() - reset previous tx and rx stats
+ * @adapter: hdd adapter reference
+ *
+ * This function resets the adapter previous tx rx stats.
+ *
+ * Return: None
+ */
+void hdd_bus_bw_compute_reset_prev_txrx_stats(struct hdd_adapter *adapter);
+
+/**
  * hdd_bus_bw_compute_timer_start() - start the bandwidth timer
  * @hdd_ctx: the global hdd context
  *
@@ -2299,9 +2583,49 @@ int hdd_bus_bandwidth_init(struct hdd_context *hdd_ctx);
  */
 void hdd_bus_bandwidth_deinit(struct hdd_context *hdd_ctx);
 
+static inline enum pld_bus_width_type
+hdd_get_current_throughput_level(struct hdd_context *hdd_ctx)
+{
+	return hdd_ctx->cur_vote_level;
+}
+
+/**
+ * hdd_set_current_throughput_level() - update the current vote
+ * level
+ * @hdd_ctx: the global hdd context
+ * @next_vote_level: pld_bus_width_type voting level
+ *
+ * This function updates the current vote level to the new level
+ * provided
+ *
+ * Return: None
+ */
+static inline void
+hdd_set_current_throughput_level(struct hdd_context *hdd_ctx,
+				 enum pld_bus_width_type next_vote_level)
+{
+	hdd_ctx->cur_vote_level = next_vote_level;
+}
+
+static inline bool
+hdd_is_low_tput_gro_enable(struct hdd_context *hdd_ctx)
+{
+	return (qdf_atomic_read(&hdd_ctx->low_tput_gro_enable)) ? true : false;
+}
+
 #define GET_CUR_RX_LVL(config) ((config)->cur_rx_level)
 #define GET_BW_COMPUTE_INTV(config) ((config)->bus_bw_compute_interval)
 #else
+
+static inline
+void hdd_bus_bw_compute_prev_txrx_stats(struct hdd_adapter *adapter)
+{
+}
+
+static inline
+void hdd_bus_bw_compute_reset_prev_txrx_stats(struct hdd_adapter *adapter)
+{
+}
 
 static inline
 void hdd_bus_bw_compute_timer_start(struct hdd_context *hdd_ctx)
@@ -2332,6 +2656,24 @@ int hdd_bus_bandwidth_init(struct hdd_context *hdd_ctx)
 static inline
 void hdd_bus_bandwidth_deinit(struct hdd_context *hdd_ctx)
 {
+}
+
+static inline enum pld_bus_width_type
+hdd_get_current_throughput_level(struct hdd_context *hdd_ctx)
+{
+	return PLD_BUS_WIDTH_NONE;
+}
+
+static inline void
+hdd_set_current_throughput_level(struct hdd_context *hdd_ctx,
+				 enum pld_bus_width_type next_vote_level)
+{
+}
+
+static inline bool
+hdd_is_low_tput_gro_enable(struct hdd_context *hdd_ctx)
+{
+	return false;
 }
 
 #define GET_CUR_RX_LVL(config) 0
@@ -2410,10 +2752,24 @@ bool hdd_is_5g_supported(struct hdd_context *hdd_ctx);
  *
  * Return:  true if 2GHz channels are supported
  */
-
 bool hdd_is_2g_supported(struct hdd_context *hdd_ctx);
 
 int wlan_hdd_scan_abort(struct hdd_adapter *adapter);
+
+/**
+ * hdd_indicate_active_ndp_cnt() - Callback to indicate active ndp count to hdd
+ * if ndp connection is on NDI established
+ * @psoc: pointer to psoc object
+ * @vdev_id: vdev id
+ * @cnt: number of active ndp sessions
+ *
+ * This HDD callback registerd with policy manager to indicates number of active
+ * ndp sessions to hdd.
+ *
+ * Return:  none
+ */
+void hdd_indicate_active_ndp_cnt(struct wlan_objmgr_psoc *psoc,
+				 uint8_t vdev_id, uint8_t cnt);
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 static inline bool roaming_offload_enabled(struct hdd_context *hdd_ctx)
@@ -2599,24 +2955,28 @@ hdd_store_nss_chains_cfg_in_vdev(struct hdd_adapter *adapter);
 /**
  * wlan_hdd_disable_roaming() - disable roaming on all STAs except the input one
  * @cur_adapter: Current HDD adapter passed from caller
+ * @mlme_operation_requestor: roam disable requestor
  *
  * This function loops through all adapters and disables roaming on each STA
  * mode adapter except the current adapter passed from the caller
  *
  * Return: None
  */
-void wlan_hdd_disable_roaming(struct hdd_adapter *cur_adapter);
+void wlan_hdd_disable_roaming(struct hdd_adapter *cur_adapter,
+			      uint32_t mlme_operation_requestor);
 
 /**
  * wlan_hdd_enable_roaming() - enable roaming on all STAs except the input one
  * @cur_adapter: Current HDD adapter passed from caller
+ * @mlme_operation_requestor: roam disable requestor
  *
  * This function loops through all adapters and enables roaming on each STA
  * mode adapter except the current adapter passed from the caller
  *
  * Return: None
  */
-void wlan_hdd_enable_roaming(struct hdd_adapter *cur_adapter);
+void wlan_hdd_enable_roaming(struct hdd_adapter *cur_adapter,
+			     uint32_t mlme_operation_requestor);
 
 QDF_STATUS hdd_post_cds_enable_config(struct hdd_context *hdd_ctx);
 
@@ -2651,7 +3011,6 @@ static inline void wlan_hdd_mod_fc_timer(struct hdd_adapter *adapter,
 #endif /* QCA_HL_NETDEV_FLOW_CONTROL */
 
 int hdd_wlan_dump_stats(struct hdd_adapter *adapter, int value);
-void wlan_hdd_deinit_tx_rx_histogram(struct hdd_context *hdd_ctx);
 void wlan_hdd_display_tx_rx_histogram(struct hdd_context *hdd_ctx);
 void wlan_hdd_clear_tx_rx_histogram(struct hdd_context *hdd_ctx);
 
@@ -3446,12 +3805,27 @@ void hdd_component_pdev_close(struct wlan_objmgr_pdev *pdev);
 #ifdef WLAN_FEATURE_MEMDUMP_ENABLE
 int hdd_driver_memdump_init(void);
 void hdd_driver_memdump_deinit(void);
+
+/**
+ * hdd_driver_mem_cleanup() - Frees memory allocated for
+ * driver dump
+ *
+ * This function  frees driver dump memory.
+ *
+ * Return: None
+ */
+void hdd_driver_mem_cleanup(void);
+
 #else /* WLAN_FEATURE_MEMDUMP_ENABLE */
 static inline int hdd_driver_memdump_init(void)
 {
 	return 0;
 }
 static inline void hdd_driver_memdump_deinit(void)
+{
+}
+
+static inline void hdd_driver_mem_cleanup(void)
 {
 }
 #endif /* WLAN_FEATURE_MEMDUMP_ENABLE */

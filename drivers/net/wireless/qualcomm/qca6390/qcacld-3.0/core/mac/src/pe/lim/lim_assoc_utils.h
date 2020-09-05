@@ -168,7 +168,8 @@ static inline bool lim_is_roam_synch_in_progress(struct pe_session *pe_session)
 
 void
 lim_send_del_sta_cnf(struct mac_context *mac, struct qdf_mac_addr sta_dsaddr,
-		     uint16_t staDsAssocId, tLimMlmStaContext mlmStaContext,
+		     uint16_t staDsAssocId,
+		     struct lim_sta_context mlmStaContext,
 		     tSirResultCodes status_code,
 		     struct pe_session *pe_session);
 
@@ -183,7 +184,8 @@ void lim_update_re_assoc_globals(struct mac_context *mac,
 
 void lim_update_assoc_sta_datas(struct mac_context *mac,
 				tpDphHashNode sta, tpSirAssocRsp pAssocRsp,
-				struct pe_session *pe_session);
+				struct pe_session *pe_session,
+				tSchBeaconStruct *beacon);
 
 QDF_STATUS lim_sta_send_add_bss(struct mac_context *mac, tpSirAssocRsp pAssocRsp,
 				   tpSchBeaconStruct pBeaconStruct,
@@ -298,4 +300,18 @@ void
 lim_extract_ies_from_deauth_disassoc(struct pe_session *session,
 				     uint8_t *deauth_disassoc_frame,
 				     uint16_t deauth_disassoc_frame_len);
+
+/**
+ * lim_update_vhtcaps_assoc_resp : Update VHT caps in assoc response.
+ * @mac_ctx Pointer to Global MAC structure
+ * @pAddBssParams: bss param
+ * @vht_caps: VHT capabilities.
+ * @pe_session : session entry.
+ *
+ * Return : void
+ */
+void lim_update_vhtcaps_assoc_resp(struct mac_context *mac_ctx,
+				   tpAddBssParams pAddBssParams,
+				   tDot11fIEVHTCaps *vht_caps,
+				   struct pe_session *pe_session);
 #endif /* __LIM_ASSOC_UTILS_H */

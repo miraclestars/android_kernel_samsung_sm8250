@@ -47,13 +47,19 @@
  * @PLD_BUS_TYPE_NONE: invalid bus type, only return in error cases
  * @PLD_BUS_TYPE_PCIE: PCIE bus
  * @PLD_BUS_TYPE_SNOC: SNOC bus
+ * @PLD_BUS_TYPE_SDIO: SDIO bus
+ * @PLD_BUS_TYPE_USB : USB bus
+ * @PLD_BUS_TYPE_SNOC_FW_SIM : SNOC FW SIM bus
+ * @PLD_BUS_TYPE_PCIE_FW_SIM : PCIE FW SIM bus
  */
 enum pld_bus_type {
 	PLD_BUS_TYPE_NONE = -1,
 	PLD_BUS_TYPE_PCIE = 0,
 	PLD_BUS_TYPE_SNOC,
 	PLD_BUS_TYPE_SDIO,
-	PLD_BUS_TYPE_USB
+	PLD_BUS_TYPE_USB,
+	PLD_BUS_TYPE_SNOC_FW_SIM,
+	PLD_BUS_TYPE_PCIE_FW_SIM,
 };
 
 #define PLD_MAX_FIRMWARE_SIZE (1 * 1024 * 1024)
@@ -107,10 +113,12 @@ struct pld_fw_files {
  * enum pld_platform_cap_flag - platform capability flag
  * @PLD_HAS_EXTERNAL_SWREG: has external regulator
  * @PLD_HAS_UART_ACCESS: has UART access
+ * @PLD_HAS_DRV_SUPPORT: has PCIe DRV support
  */
 enum pld_platform_cap_flag {
 	PLD_HAS_EXTERNAL_SWREG = 0x01,
 	PLD_HAS_UART_ACCESS = 0x02,
+	PLD_HAS_DRV_SUPPORT = 0x04,
 };
 
 /**
@@ -404,6 +412,8 @@ void pld_get_default_fw_files(struct pld_fw_files *pfw_files);
 int pld_get_fw_files_for_target(struct device *dev,
 				struct pld_fw_files *pfw_files,
 				u32 target_type, u32 target_version);
+int pld_prevent_l1(struct device *dev);
+void pld_allow_l1(struct device *dev);
 void pld_is_pci_link_down(struct device *dev);
 int pld_shadow_control(struct device *dev, bool enable);
 void pld_schedule_recovery_work(struct device *dev,
@@ -507,22 +517,7 @@ static inline uint8_t *pld_get_wlan_derived_mac_address(struct device *dev,
 {
 	return cnss_utils_get_wlan_derived_mac_address(dev, num);
 }
-#ifdef SEC_READ_MACADDR_SYSFS
-/**
- * pld_set_wlan_mac_address() - API to set MAC address
- * to platform Driver
- * @dev: Device Structure
- * @num: Pointer to number of MAC address supported
- *
- * Return: 0 for success
- *         Non zero failure code for errors
- */
-static inline int pld_set_wlan_mac_address(const u8 *mac_list,
-							const uint32_t len)
-{
-	return cnss_utils_set_wlan_mac_address(mac_list, len);
-}
-#endif /*SEC_READ_MACADDR_SYSFS*/
+
 /**
  * pld_increment_driver_load_cnt() - Maintain driver load count
  * @dev: device
@@ -584,13 +579,7 @@ static inline uint8_t *pld_get_wlan_derived_mac_address(struct device *dev,
 	*num = 0;
 	return NULL;
 }
-#ifdef SEC_READ_MACADDR_SYSFS
-static inline int pld_set_wlan_mac_address(const u8 *mac_list,
-							const uint32_t len)
-{
-	return -EINVAL;
-}
-#endif /*SEC_READ_MACADDR_SYSFS*/
+
 static inline void pld_increment_driver_load_cnt(struct device *dev) {}
 static inline int pld_get_driver_load_cnt(struct device *dev)
 {
@@ -622,6 +611,7 @@ void *pld_get_fw_ptr(struct device *dev);
 int pld_auto_suspend(struct device *dev);
 int pld_auto_resume(struct device *dev);
 int pld_force_wake_request(struct device *dev);
+int pld_force_wake_request_sync(struct device *dev, int timeout_us);
 int pld_is_device_awake(struct device *dev);
 int pld_force_wake_release(struct device *dev);
 int pld_ce_request_irq(struct device *dev, unsigned int ce_id,
@@ -635,6 +625,8 @@ int pld_get_ce_id(struct device *dev, int irq);
 int pld_get_irq(struct device *dev, int ce_id);
 void pld_lock_pm_sem(struct device *dev);
 void pld_release_pm_sem(struct device *dev);
+void pld_lock_reg_window(struct device *dev, unsigned long *flags);
+void pld_unlock_reg_window(struct device *dev, unsigned long *flags);
 int pld_power_on(struct device *dev);
 int pld_power_off(struct device *dev);
 int pld_athdiag_read(struct device *dev, uint32_t offset, uint32_t memtype,
@@ -658,9 +650,13 @@ int pld_is_drv_connected(struct device *dev);
 unsigned int pld_socinfo_get_serial_number(struct device *dev);
 int pld_is_qmi_disable(struct device *dev);
 int pld_is_fw_down(struct device *dev);
-void pld_block_shutdown(struct device *dev, bool status);
 int pld_force_assert_target(struct device *dev);
 int pld_collect_rddm(struct device *dev);
+int pld_qmi_send_get(struct device *dev);
+int pld_qmi_send_put(struct device *dev);
+int pld_qmi_send(struct device *dev, int type, void *cmd,
+		 int cmd_len, void *cb_ctx,
+		 int (*cb)(void *ctx, void *event, int event_len));
 bool pld_is_fw_dump_skipped(struct device *dev);
 
 /**
@@ -712,7 +708,94 @@ int pld_idle_shutdown(struct device *dev,
  */
 int pld_idle_restart(struct device *dev,
 		     int (*restart_cb)(struct device *dev));
+/**
+ * pld_srng_request_irq() - Register IRQ for SRNG
+ * @dev: device
+ * @irq: IRQ number
+ * @handler: IRQ callback function
+ * @irqflags: IRQ flags
+ * @name: IRQ name
+ * @ctx: IRQ context
+ *
+ * Return: 0 for success
+ *         Non zero failure code for errors
+ */
+int pld_srng_request_irq(struct device *dev, int irq, irq_handler_t handler,
+			 unsigned long irqflags,
+			 const char *name,
+			 void *ctx);
+/**
+ * pld_srng_free_irq() - Free IRQ for SRNG
+ * @dev: device
+ * @irq: IRQ number
+ * @ctx: IRQ context
+ *
+ * Return: 0 for success
+ *         Non zero failure code for errors
+ */
+int pld_srng_free_irq(struct device *dev, int irq, void *ctx);
 
+/**
+ * pld_srng_enable_irq() - Enable IRQ for SRNG
+ * @dev: device
+ * @irq: IRQ number
+ *
+ * Return: void
+ */
+void pld_srng_enable_irq(struct device *dev, int irq);
+
+/**
+ * pld_disable_irq() - Disable IRQ for SRNG
+ * @dev: device
+ * @irq: IRQ number
+ *
+ * Return: void
+ */
+void pld_srng_disable_irq(struct device *dev, int irq);
+
+/**
+ * pld_pci_read_config_word() - Read PCI config
+ * @pdev: pci device
+ * @offset: Config space offset
+ * @val : Value
+ *
+ * Return: 0 for success
+ *         Non zero failure code for errors
+ */
+int pld_pci_read_config_word(struct pci_dev *pdev, int offset, uint16_t *val);
+
+/**
+ * pld_pci_write_config_word() - Write PCI config
+ * @pdev: pci device
+ * @offset: Config space offset
+ * @val : Value
+ *
+ * Return: 0 for success
+ *         Non zero failure code for errors
+ */
+int pld_pci_write_config_word(struct pci_dev *pdev, int offset, uint16_t val);
+
+/**
+ * pld_pci_read_config_dword() - Read PCI config
+ * @pdev: pci device
+ * @offset: Config space offset
+ * @val : Value
+ *
+ * Return: 0 for success
+ *         Non zero failure code for errors
+ */
+int pld_pci_read_config_dword(struct pci_dev *pdev, int offset, uint32_t *val);
+
+/**
+ * pld_pci_write_config_dword() - Write PCI config
+ * @pdev: pci device
+ * @offset: Config space offset
+ * @val : Value
+ *
+ * Return: 0 for success
+ *         Non zero failure code for errors
+ */
+int pld_pci_write_config_dword(struct pci_dev *pdev, int offset, uint32_t val);
 #if defined(CONFIG_WCNSS_MEM_PRE_ALLOC) && defined(FEATURE_SKB_PRE_ALLOC)
 
 /**
@@ -751,4 +834,59 @@ static inline int pld_nbuf_pre_alloc_free(struct sk_buff *skb)
 	return 0;
 }
 #endif
+/**
+ * pld_get_bus_type() - Bus type of the device
+ * @dev: device
+ *
+ * Return: PLD bus type
+ */
+enum pld_bus_type pld_get_bus_type(struct device *dev);
+
+static inline int pfrm_request_irq(struct device *dev, unsigned int ce_id,
+				   irqreturn_t (*handler)(int, void *),
+				   unsigned long flags, const char *name,
+				   void *ctx)
+{
+	return pld_srng_request_irq(dev, ce_id, handler, flags, name, ctx);
+}
+
+static inline int pfrm_free_irq(struct device *dev, int irq, void *ctx)
+{
+	return pld_srng_free_irq(dev, irq, ctx);
+}
+
+static inline void pfrm_enable_irq(struct device *dev, int irq)
+{
+	pld_srng_enable_irq(dev, irq);
+}
+
+static inline void pfrm_disable_irq_nosync(struct device *dev, int irq)
+{
+	pld_srng_disable_irq(dev, irq);
+}
+
+static inline int pfrm_read_config_word(struct pci_dev *pdev, int offset,
+					uint16_t *val)
+{
+	return pld_pci_read_config_word(pdev, offset, val);
+}
+
+static inline int pfrm_write_config_word(struct pci_dev *pdev, int offset,
+					 uint16_t val)
+{
+	return pld_pci_write_config_word(pdev, offset, val);
+}
+
+static inline int pfrm_read_config_dword(struct pci_dev *pdev, int offset,
+					 uint32_t *val)
+{
+	return pld_pci_read_config_dword(pdev, offset, val);
+}
+
+static inline int pfrm_write_config_dword(struct pci_dev *pdev, int offset,
+					  uint32_t val)
+{
+	return pld_pci_write_config_dword(pdev, offset, val);
+}
+
 #endif

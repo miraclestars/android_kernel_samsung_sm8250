@@ -155,6 +155,25 @@ static QDF_STATUS sta_mlme_vdev_restart_send(struct vdev_mlme_obj *vdev_mlme,
 }
 
 /**
+ * sta_mlme_vdev_start_req_failed() - MLME start fail callback
+ * @vdev_mlme: vdev mlme object
+ * @event_data_len: event data length
+ * @event_data: event data
+ *
+ * This function is called to send the vdev stop to firmware
+ *
+ * Return: QDF_STATUS
+ */
+static QDF_STATUS sta_mlme_vdev_start_req_failed(struct vdev_mlme_obj *vdev_mlme,
+						 uint16_t data_len,
+						 void *data)
+{
+	mlme_legacy_debug("vdev id = %d ",
+			  vdev_mlme->vdev->vdev_objmgr.vdev_id);
+	return lim_sta_mlme_vdev_req_fail(vdev_mlme, data_len, data);
+}
+
+/**
  * sta_mlme_vdev_start_connection() - MLME vdev start callback
  * @vdev_mlme: vdev mlme object
  * @event_data_len: event data length
@@ -778,7 +797,7 @@ QDF_STATUS mlme_set_mbssid_info(struct wlan_objmgr_vdev *vdev,
 }
 
 void mlme_get_mbssid_info(struct wlan_objmgr_vdev *vdev,
-			  struct vdev_mlme_mbss_11ax *mbss_11ax)
+			  struct vdev_mlme_mbss_11ax **mbss_11ax)
 {
 	struct vdev_mlme_obj *vdev_mlme;
 
@@ -788,7 +807,7 @@ void mlme_get_mbssid_info(struct wlan_objmgr_vdev *vdev,
 		return;
 	}
 
-	mbss_11ax = &vdev_mlme->mgmt.mbss_11ax;
+	*mbss_11ax = &vdev_mlme->mgmt.mbss_11ax;
 }
 
 /**
@@ -829,6 +848,7 @@ QDF_STATUS vdevmgr_mlme_ext_hdl_destroy(struct vdev_mlme_obj *vdev_mlme)
 
 	mlme_free_self_disconnect_ies(vdev_mlme->vdev);
 	mlme_free_peer_disconnect_ies(vdev_mlme->vdev);
+	mlme_free_sae_auth_retry(vdev_mlme->vdev);
 	qdf_mem_free(vdev_mlme->ext_vdev_ptr);
 	vdev_mlme->ext_vdev_ptr = NULL;
 
@@ -998,6 +1018,7 @@ static struct vdev_mlme_ops sta_mlme_ops = {
 	.mlme_vdev_start_send = sta_mlme_vdev_start_send,
 	.mlme_vdev_restart_send = sta_mlme_vdev_restart_send,
 	.mlme_vdev_start_continue = sta_mlme_start_continue,
+	.mlme_vdev_start_req_failed = sta_mlme_vdev_start_req_failed,
 	.mlme_vdev_sta_conn_start = sta_mlme_vdev_start_connection,
 	.mlme_vdev_up_send = sta_mlme_vdev_up_send,
 	.mlme_vdev_notify_up_complete = sta_mlme_vdev_notify_up_complete,

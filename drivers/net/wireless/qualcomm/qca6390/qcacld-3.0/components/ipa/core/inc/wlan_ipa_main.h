@@ -334,6 +334,14 @@ QDF_STATUS ipa_uc_ol_init(struct wlan_objmgr_pdev *pdev,
 QDF_STATUS ipa_uc_ol_deinit(struct wlan_objmgr_pdev *pdev);
 
 /**
+ * ipa_is_tx_pending() - Check if IPA WLAN TX completions are pending
+ * @pdev: pdev obj
+ *
+ * Return: bool if pending TX for IPA.
+ */
+bool ipa_is_tx_pending(struct wlan_objmgr_pdev *pdev);
+
+/**
  * ipa_send_mcc_scc_msg() - Send IPA WLAN_SWITCH_TO_MCC/SCC message
  * @pdev: pdev obj
  * @mcc_mode: 0=MCC/1=SCC
@@ -377,6 +385,19 @@ int ipa_uc_smmu_map(bool map, uint32_t num_buf, qdf_mem_info_t *buf_arr);
  * Return: true if FW WDI activated, false otherwise
  */
 bool ipa_is_fw_wdi_activated(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * ipa_uc_cleanup_sta() - disconnect and cleanup sta iface
+ * @pdev: pdev obj
+ * @net_dev: Interface net device
+ *
+ * Send disconnect sta event to IPA driver and cleanup IPA iface,
+ * if not yet done
+ *
+ * Return: void
+ */
+void ipa_uc_cleanup_sta(struct wlan_objmgr_pdev *pdev,
+			qdf_netdev_t net_dev);
 
 /**
  * ipa_uc_disconnect_ap() - send ap disconnect event
@@ -429,9 +450,15 @@ void ipa_component_config_update(struct wlan_objmgr_psoc *psoc);
  *
  * Return: IPA config tx buffer count
  */
-
 uint32_t ipa_get_tx_buf_count(void);
 
+/**
+ * ipa_update_tx_stats() - Update embedded tx traffic in bytes to IPA
+ *
+ * Return: IPA config tx buffer count
+ */
+void ipa_update_tx_stats(struct wlan_objmgr_pdev *pdev, uint64_t sta_tx,
+			 uint64_t ap_tx);
 #else /* Not IPA_OFFLOAD */
 typedef QDF_STATUS (*wlan_ipa_softap_xmit)(qdf_nbuf_t nbuf, qdf_netdev_t dev);
 typedef void (*wlan_ipa_send_to_nw)(qdf_nbuf_t nbuf, qdf_netdev_t dev);

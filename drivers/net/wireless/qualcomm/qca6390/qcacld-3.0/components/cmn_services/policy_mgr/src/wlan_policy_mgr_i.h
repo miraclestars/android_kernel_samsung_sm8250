@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -180,6 +180,9 @@
 #define policymgr_nofl_debug(params...) \
 	QDF_TRACE_DEBUG_NO_FL(QDF_MODULE_ID_POLICY_MGR, params)
 
+#define policy_mgr_rl_debug(params...) \
+	QDF_TRACE_DEBUG_RL(QDF_MODULE_ID_POLICY_MGR, params)
+
 #define PM_CONC_CONNECTION_LIST_VALID_INDEX(index) \
 		((MAX_NUMBER_OF_CONC_CONNECTIONS > index) && \
 			(pm_conc_connection_list[index].in_use))
@@ -190,8 +193,9 @@ extern struct policy_mgr_conc_connection_info
 extern const enum policy_mgr_pcl_type
 	first_connection_pcl_table[PM_MAX_NUM_OF_MODE]
 			[PM_MAX_CONC_PRIORITY_MODE];
-extern pm_dbs_pcl_second_connection_table_type
-		*second_connection_pcl_dbs_table;
+extern enum policy_mgr_pcl_type
+	(*second_connection_pcl_dbs_table)[PM_MAX_ONE_CONNECTION_MODE]
+			[PM_MAX_NUM_OF_MODE][PM_MAX_CONC_PRIORITY_MODE];
 extern pm_dbs_pcl_third_connection_table_type
 		*third_connection_pcl_dbs_table;
 extern policy_mgr_next_action_two_connection_table_type
@@ -237,6 +241,8 @@ struct sta_ap_intf_check_work_ctx {
  * @chnl_select_plcy: Channel selection policy
  * @enable_mcc_adaptive_sch: Enable/Disable MCC adaptive scheduler
  * @enable_sta_cxn_5g_band: Enable/Disable STA connection in 5G band
+ * @prefer_5g_scc_to_dbs: Prefer to work in 5G SCC mode.
+ * @go_force_scc: Enable/Disable P2P GO force SCC
  */
 struct policy_mgr_cfg {
 	uint8_t mcc_to_scc_switch;
@@ -248,7 +254,7 @@ struct policy_mgr_cfg {
 	uint8_t allow_mcc_go_diff_bi;
 	uint8_t enable_overlap_chnl;
 	uint8_t dual_mac_feature;
-	uint8_t is_force_1x1_enable;
+	enum force_1x1_type is_force_1x1_enable;
 	uint8_t sta_sap_scc_on_dfs_chnl;
 	uint8_t sta_sap_scc_on_lte_coex_chnl;
 	uint8_t nan_sap_scc_on_lte_coex_chnl;
@@ -258,6 +264,8 @@ struct policy_mgr_cfg {
 	uint32_t dbs_selection_plcy;
 	uint32_t vdev_priority_list;
 	uint32_t chnl_select_plcy;
+	uint32_t prefer_5g_scc_to_dbs;
+	uint8_t go_force_scc;
 };
 
 /**
@@ -322,7 +330,7 @@ struct policy_mgr_psoc_priv_obj {
 	struct policy_mgr_tdls_cbacks tdls_cbacks;
 	struct policy_mgr_cdp_cbacks cdp_cbacks;
 	struct policy_mgr_dp_cbacks dp_cbacks;
-	uint8_t sap_mandatory_channels[QDF_MAX_NUM_CHAN];
+	uint8_t sap_mandatory_channels[NUM_CHANNELS];
 	uint32_t sap_mandatory_channels_len;
 	bool do_hw_mode_change;
 	uint32_t concurrency_mode;
@@ -337,7 +345,7 @@ struct policy_mgr_psoc_priv_obj {
 	struct dual_mac_config dual_mac_cfg;
 	uint32_t hw_mode_change_in_progress;
 	struct policy_mgr_user_cfg user_cfg;
-	uint16_t unsafe_channel_list[QDF_MAX_NUM_CHAN];
+	uint16_t unsafe_channel_list[NUM_CHANNELS];
 	uint16_t unsafe_channel_count;
 	struct sta_ap_intf_check_work_ctx *sta_ap_intf_check_work_info;
 	uint8_t cur_conc_system_pref;
@@ -378,6 +386,16 @@ QDF_STATUS policy_mgr_get_updated_fw_mode_config(
 		bool agile_dfs);
 bool policy_mgr_is_dual_mac_disabled_in_ini(
 		struct wlan_objmgr_psoc *psoc);
+
+/**
+ * policy_mgr_find_if_hwlist_has_dbs() - Find if hw list has DBS modes or not
+ * @psoc: PSOC object information
+ *
+ * Find if hw list has DBS modes or not
+ *
+ * Return: true or false
+ */
+bool policy_mgr_find_if_hwlist_has_dbs(struct wlan_objmgr_psoc *psoc);
 
 /**
  * policy_mgr_get_mcc_to_scc_switch_mode() - MCC to SCC
@@ -441,7 +459,7 @@ void policy_mgr_store_and_del_conn_info(struct wlan_objmgr_psoc *psoc,
  * connection info by vdev id
  * @psoc: PSOC object information
  * @vdev_id: vdev id whose entry has to be deleted
- * @info: struture array pointer where the connection info will be saved
+ * @info: structure array pointer where the connection info will be saved
  * @num_cxn_del: number of connection which are going to be deleted
  *
  * Saves the connection info corresponding to the provided mode
@@ -453,6 +471,27 @@ void policy_mgr_store_and_del_conn_info(struct wlan_objmgr_psoc *psoc,
 void policy_mgr_store_and_del_conn_info_by_vdev_id(
 			struct wlan_objmgr_psoc *psoc,
 			uint32_t vdev_id,
+			struct policy_mgr_conc_connection_info *info,
+			uint8_t *num_cxn_del);
+
+/**
+ * policy_mgr_store_and_del_conn_info_by_chan_and_mode() - Store and del a
+ * connection info by chan number and conn mode
+ * @psoc: PSOC object information
+ * @chan: channel number
+ * @mode: conn mode
+ * @info: structure array pointer where the connection info will be saved
+ * @num_cxn_del: number of connection which are going to be deleted
+ *
+ * Saves and deletes the entries if the active connection entry chan and mode
+ * matches the provided chan & mode from the function parameters.
+ *
+ * Return: None
+ */
+void policy_mgr_store_and_del_conn_info_by_chan_and_mode(
+			struct wlan_objmgr_psoc *psoc,
+			uint32_t chan,
+			enum policy_mgr_con_mode mode,
 			struct policy_mgr_conc_connection_info *info,
 			uint8_t *num_cxn_del);
 

@@ -74,13 +74,23 @@ typedef uint8_t tSirVersionString[SIR_VERSION_STRING_LEN];
 #define PERIODIC_TX_PTRN_MAX_SIZE 1536
 #define MAXNUM_PERIODIC_TX_PTRNS 6
 
-
 /* FW response timeout values in milli seconds */
 #define SIR_PEER_ASSOC_TIMEOUT (4000) /* 4 seconds */
+#ifdef FEATURE_RUNTIME_PM
+/* Add extra PMO_RESUME_TIMEOUT for runtime PM resume timeout */
+#define SIR_DELETE_STA_TIMEOUT (4000 + PMO_RESUME_TIMEOUT)
+#define SIR_VDEV_START_REQUEST_TIMEOUT   (6000 + PMO_RESUME_TIMEOUT)
+#define SIR_VDEV_STOP_REQUEST_TIMEOUT    (4000 + PMO_RESUME_TIMEOUT)
+#define SIR_VDEV_DELETE_REQUEST_TIMEOUT  (4000 + PMO_RESUME_TIMEOUT)
+#define SIR_VDEV_PLCY_MGR_TIMEOUT        (2000 + PMO_RESUME_TIMEOUT)
+#else
 #define SIR_DELETE_STA_TIMEOUT (4000) /* 4 seconds */
 #define SIR_VDEV_START_REQUEST_TIMEOUT   (6000)
 #define SIR_VDEV_STOP_REQUEST_TIMEOUT    (4000)
 #define SIR_VDEV_PLCY_MGR_TIMEOUT        (2000)
+#define SIR_VDEV_DELETE_REQUEST_TIMEOUT  (4000)
+#endif
+
 
 /* This should not be greater than MAX_NUMBER_OF_CONC_CONNECTIONS */
 #define MAX_VDEV_SUPPORTED                        4
@@ -143,6 +153,7 @@ struct scheduler_msg;
  * @SIR_ROAMING_ABORT: Firmware aborted roaming operation, still connected.
  * @SIR_ROAM_SYNCH_COMPLETE: Roam sync propagation is complete.
  * @SIR_ROAMING_INVOKE_FAIL: Firmware roaming failed.
+ * @SIR_ROAMING_DEAUTH: Firmware indicates deauth.
  */
 enum sir_roam_op_code {
 	SIR_ROAM_SYNCH_PROPAGATION = 1,
@@ -152,6 +163,7 @@ enum sir_roam_op_code {
 	SIR_ROAM_SYNCH_COMPLETE,
 	SIR_ROAM_SYNCH_NAPI_OFF,
 	SIR_ROAMING_INVOKE_FAIL,
+	SIR_ROAMING_DEAUTH,
 };
 /**
  * Module ID definitions.
@@ -185,7 +197,22 @@ struct rsn_caps {
 };
 
 /**
+ * struct roam_scan_ch_resp - roam scan chan list response to userspace
+ * @vdev_id: vdev id
+ * @num_channels: number of roam scan channels
+ * @command_resp: command response or async event
+ * @chan_list: list of roam scan channels
+ */
+struct roam_scan_ch_resp {
+	uint16_t vdev_id;
+	uint16_t num_channels;
+	uint32_t command_resp;
+	uint32_t *chan_list;
+};
+
+/**
  * struct wlan_beacon_report - Beacon info to be send to userspace
+ * @vdev_id: vdev id
  * @ssid: ssid present in beacon
  * @bssid: bssid present in beacon
  * @frequency: channel frequency in MHz
@@ -194,6 +221,7 @@ struct rsn_caps {
  * @boot_time: Boot time when beacon received
  */
 struct wlan_beacon_report {
+	uint8_t vdev_id;
 	struct wlan_ssid ssid;
 	struct qdf_mac_addr bssid;
 	uint32_t frequency;
@@ -371,6 +399,9 @@ struct sme_ready_req {
 	uint16_t messageType;   /* eWNI_SME_SYS_READY_IND */
 	uint16_t length;
 	void *csr_roam_synch_cb;
+	QDF_STATUS (*csr_roam_auth_event_handle_cb)(struct mac_context *mac,
+						    uint8_t vdev_id,
+						    struct qdf_mac_addr bssid);
 	void *pe_roam_synch_cb;
 	void *stop_roaming_cb;
 	QDF_STATUS (*sme_msg_cb)(struct mac_context *mac,
@@ -378,7 +409,8 @@ struct sme_ready_req {
 	QDF_STATUS (*pe_disconnect_cb) (struct mac_context *mac,
 					uint8_t vdev_id,
 					uint8_t *deauth_disassoc_frame,
-					uint16_t deauth_disassoc_frame_len);
+					uint16_t deauth_disassoc_frame_len,
+					uint16_t reason_code);
 };
 
 /**
@@ -691,6 +723,10 @@ struct bss_description {
 #endif
 	uint32_t assoc_disallowed;
 	uint32_t adaptive_11r_ap;
+	uint32_t mbo_oce_enabled_ap;
+#if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
+	uint32_t is_single_pmk;
+#endif
 	/* Please keep the structure 4 bytes aligned above the ieFields */
 	uint32_t ieFields[1];
 };
@@ -1114,6 +1150,7 @@ struct assoc_ind {
 	const uint8_t *owe_ie;
 	uint32_t owe_ie_len;
 	uint16_t owe_status;
+	bool need_assoc_rsp_tx_cb;
 };
 
 /**
@@ -1138,6 +1175,7 @@ struct assoc_cnf {
 	enum mac_status_code mac_status_code;
 	uint8_t *owe_ie;
 	uint32_t owe_ie_len;
+	bool need_assoc_rsp_tx_cb;
 };
 
 /* / Enum definition for  Wireless medium status change codes */
@@ -1252,6 +1290,7 @@ struct disassoc_ind {
 	struct qdf_mac_addr peer_macaddr;
 	uint16_t staId;
 	uint32_t reasonCode;
+	bool from_ap;
 };
 
 /* / Definition for Disassociation confirm */
@@ -1312,6 +1351,7 @@ struct deauth_ind {
 	uint16_t staId;
 	uint32_t reasonCode;
 	int8_t rssi;
+	bool from_ap;
 };
 
 /* / Definition for Deauthetication confirm */
@@ -2105,12 +2145,12 @@ typedef struct {
 	uint32_t authentication;
 	uint8_t encryption;
 	uint8_t mcencryption;
+	tAniEdType gp_mgmt_cipher_suite;
 	uint8_t ChannelCount;
 	uint8_t ChannelCache[SIR_ROAM_MAX_CHANNELS];
 #ifdef WLAN_FEATURE_11W
 	bool mfp_enabled;
 #endif
-
 } tSirRoamNetworkType;
 
 typedef enum {
@@ -2236,6 +2276,24 @@ struct mawc_params {
 	uint8_t mawc_roam_rssi_low_adjust;
 };
 
+/**
+ * struct roam_init_params - Firmware roam module initialization parameters
+ * @vdev_id: vdev for which the roaming has to be enabled/disabled
+ * @enable:  flag to init/deinit roam module
+ */
+struct roam_init_params {
+	uint8_t vdev_id;
+	uint8_t enable;
+};
+
+/**
+ * struct roam_sync_timeout_timer_info - Info related to roam sync timer
+ * @vdev_id: Vdev id for which host waiting roam sync ind from fw
+ */
+struct roam_sync_timeout_timer_info {
+	uint8_t vdev_id;
+};
+
 struct roam_offload_scan_req {
 	uint16_t message_type;
 	uint16_t length;
@@ -2270,6 +2328,7 @@ struct roam_offload_scan_req {
 	eSirDFSRoamScanMode allowDFSChannelRoam;
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 	uint8_t roam_offload_enabled;
+	bool enable_self_bss_roam;
 	uint8_t PSK_PMK[SIR_ROAM_SCAN_PSK_SIZE];
 	uint32_t pmk_len;
 	uint8_t Prefer5GHz;
@@ -2284,12 +2343,14 @@ struct roam_offload_scan_req {
 	uint8_t RoamKeyMgmtOffloadEnabled;
 	struct pmkid_mode_bits pmkid_modes;
 	bool is_adaptive_11r_connection;
+	bool is_sae_single_pmk;
 
 	/* Idle/Disconnect roam parameters */
 	struct wmi_idle_roam_params idle_roam_params;
 	struct wmi_disconnect_roam_params disconnect_roam_params;
 #endif
 	struct roam_ext_params roam_params;
+	struct roam_triggers roam_triggers;
 	uint8_t  middle_of_roaming;
 	uint32_t hi_rssi_scan_max_count;
 	uint32_t hi_rssi_scan_rssi_delta;
@@ -2330,6 +2391,7 @@ struct roam_offload_scan_req {
 	uint32_t btm_query_bitmask;
 	struct roam_trigger_min_rssi min_rssi_params[NUM_OF_ROAM_TRIGGERS];
 	struct roam_trigger_score_delta score_delta_param[NUM_OF_ROAM_TRIGGERS];
+	uint32_t full_roam_scan_period;
 };
 
 struct roam_offload_scan_rsp {
@@ -2386,8 +2448,8 @@ struct sir_wifi_start_log {
  */
 struct sir_pcl_list {
 	uint32_t pcl_len;
-	uint8_t pcl_list[128];
-	uint8_t weight_list[128];
+	uint8_t pcl_list[NUM_CHANNELS];
+	uint8_t weight_list[NUM_CHANNELS];
 };
 
 /**
@@ -2403,12 +2465,12 @@ struct sir_pcl_list {
  * @weight_list: Weights assigned by policy manager
  */
 struct sir_pcl_chan_weights {
-	uint8_t pcl_list[128];
+	uint8_t pcl_list[NUM_CHANNELS];
 	uint32_t pcl_len;
-	uint8_t saved_chan_list[128];
+	uint8_t saved_chan_list[NUM_CHANNELS];
 	uint32_t saved_num_chan;
-	uint8_t weighed_valid_list[128];
-	uint8_t weight_list[128];
+	uint8_t weighed_valid_list[NUM_CHANNELS];
+	uint8_t weight_list[NUM_CHANNELS];
 };
 
 /**
@@ -2668,13 +2730,15 @@ struct sir_peer_info_ext_req {
  * @tx_bytes: bytes transmitted to this station
  * @rx_packets: packets received from this station
  * @rx_bytes: bytes received from this station
- * @rx_retries: cumulative retry counts
- * @tx_failed: number of failed transmissions
- * @rssi: The signal strength
+ * @tx_retries: cumulative retry counts
+ * @tx_failed: the number of failed frames
+ * @tx_succeed: the number of succeed frames
+ * @rssi: the signal strength
  * @tx_rate: last used tx bitrate (kbps)
  * @tx_rate_code: last tx rate code (last_tx_rate_code of wmi_peer_stats_info)
  * @rx_rate: last used rx bitrate (kbps)
  * @rx_rate_code: last rx rate code (last_rx_rate_code of wmi_peer_stats_info)
+ * @peer_rssi_per_chain: the average value of RSSI (dbm) per chain
  *
  * a station's information
  */
@@ -2686,11 +2750,13 @@ struct sir_peer_info_ext {
 	uint64_t rx_bytes;
 	uint32_t tx_retries;
 	uint32_t tx_failed;
+	uint32_t tx_succeed;
 	int32_t rssi;
 	uint32_t tx_rate;
 	uint32_t tx_rate_code;
 	uint32_t rx_rate;
 	uint32_t rx_rate_code;
+	int32_t peer_rssi_per_chain[WMI_MAX_CHAINS];
 };
 
 /**
@@ -3076,6 +3142,7 @@ struct roam_offload_synch_ind {
 	struct qdf_mac_addr src_mac;
 	uint16_t hlp_data_len;
 	uint8_t hlp_data[FILS_MAX_HLP_DATA_LEN];
+	enum wlan_phymode phy_mode;
 };
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
@@ -3098,6 +3165,29 @@ struct sir_wisa_params {
 	bool mode;
 	uint8_t vdev_id;
 };
+
+/**
+ * typedef enum wifi_scan_flags - wifi scan flags
+ * @WIFI_SCAN_FLAG_INTERRUPTED: Indicates that scan results are not complete
+ *				because probes were not sent on some channels
+ */
+typedef enum {
+	WIFI_SCAN_FLAG_INTERRUPTED = 1,
+} wifi_scan_flags;
+
+typedef enum {
+	WIFI_BAND_UNSPECIFIED,
+	WIFI_BAND_BG = 1,       /* 2.4 GHz */
+	WIFI_BAND_A = 2,        /* 5 GHz without DFS */
+	WIFI_BAND_ABG = 3,      /* 2.4 GHz + 5 GHz; no DFS */
+	WIFI_BAND_A_DFS_ONLY = 4,       /* 5 GHz DFS only */
+	/* 5 is reserved */
+	WIFI_BAND_A_WITH_DFS = 6,       /* 5 GHz with DFS */
+	WIFI_BAND_ABG_WITH_DFS = 7,     /* 2.4 GHz + 5 GHz with DFS */
+
+	/* Keep it last */
+	WIFI_BAND_MAX
+} tWifiBand;
 
 #ifdef FEATURE_WLAN_EXTSCAN
 
@@ -3130,29 +3220,6 @@ typedef enum {
 	/* Keep this last */
 	eSIR_EXTSCAN_CALLBACK_TYPE_MAX,
 } tSirExtScanCallbackType;
-
-/**
- * typedef enum wifi_scan_flags - wifi scan flags
- * @WIFI_SCAN_FLAG_INTERRUPTED: Indicates that scan results are not complete
- *				because probes were not sent on some channels
- */
-typedef enum {
-	WIFI_SCAN_FLAG_INTERRUPTED = 1,
-} wifi_scan_flags;
-
-typedef enum {
-	WIFI_BAND_UNSPECIFIED,
-	WIFI_BAND_BG = 1,       /* 2.4 GHz */
-	WIFI_BAND_A = 2,        /* 5 GHz without DFS */
-	WIFI_BAND_ABG = 3,      /* 2.4 GHz + 5 GHz; no DFS */
-	WIFI_BAND_A_DFS_ONLY = 4,       /* 5 GHz DFS only */
-	/* 5 is reserved */
-	WIFI_BAND_A_WITH_DFS = 6,       /* 5 GHz with DFS */
-	WIFI_BAND_ABG_WITH_DFS = 7,     /* 2.4 GHz + 5 GHz with DFS */
-
-	/* Keep it last */
-	WIFI_BAND_MAX
-} tWifiBand;
 
 /**
  * enum wifi_extscan_event_type - extscan event type
@@ -3521,6 +3588,8 @@ struct sir_set_ht_vht_cfg {
 #define WIFI_INVALID_PEER_ID            (-1)
 #define WIFI_INVALID_VDEV_ID            (-1)
 #define WIFI_MAX_AC                     (4)
+#define RATE_STAT_MCS_MASK              (0xFF00)
+#define RATE_STAT_GET_MCS_INDEX(x)      (((x) & RATE_STAT_MCS_MASK) >> 8)
 
 typedef struct {
 	uint32_t paramId;
@@ -4534,6 +4603,11 @@ struct sir_sme_ext_cng_chan_req {
 	uint32_t  new_channel;
 	uint8_t   session_id;
 };
+
+#define IGNORE_NUD_FAIL                      0
+#define DISCONNECT_AFTER_NUD_FAIL            1
+#define ROAM_AFTER_NUD_FAIL                  2
+#define DISCONNECT_AFTER_ROAM_FAIL           3
 
 /**
  * struct sir_sme_ext_change_chan_ind.
@@ -5555,6 +5629,8 @@ struct wow_enable_params {
 #define AUTO_RATE_GI_1600NS	10
 #define AUTO_RATE_GI_3200NS	11
 
+#define AUTO_RATE_LDPC_DIS_BIT	16
+
 #define SET_AUTO_RATE_SGI_VAL(set_val, bit_mask) \
 	(set_val = (set_val & HE_LTF_ALL) | bit_mask)
 
@@ -5777,6 +5853,8 @@ struct sme_rcpi_req {
  * @REASSOC_IN_PROGRESS: reassociation is in progress
  * @EAPOL_IN_PROGRESS: STA/P2P-CLI is in middle of EAPOL/WPS exchange
  * @SAP_EAPOL_IN_PROGRESS: SAP/P2P-GO is in middle of EAPOL/WPS exchange
+ * @SAP_CONNECTION_IN_PROGRESS: SAP/P2P-GO is in middle of connection.
+ * @NAN_ENABLE_DISABLE_IN_PROGRESS: NAN is in middle of enable/disable discovery
  */
 enum scan_reject_states {
 	SCAN_REJECT_DEFAULT = 0,
@@ -5784,6 +5862,8 @@ enum scan_reject_states {
 	REASSOC_IN_PROGRESS,
 	EAPOL_IN_PROGRESS,
 	SAP_EAPOL_IN_PROGRESS,
+	SAP_CONNECTION_IN_PROGRESS,
+	NAN_ENABLE_DISABLE_IN_PROGRESS,
 };
 
 /**

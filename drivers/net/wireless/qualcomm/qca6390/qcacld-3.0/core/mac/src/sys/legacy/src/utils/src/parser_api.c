@@ -128,15 +128,14 @@ int find_ie_location(struct mac_context *mac, tpSirRSNie pRsnIe, uint8_t EID)
 	bytesLeft = pRsnIe->length;
 
 	while (1) {
-		if (EID == pRsnIe->rsnIEdata[idx]) {
+		if (EID == pRsnIe->rsnIEdata[idx])
 			/* Found it */
 			return idx;
-		} else if (EID != pRsnIe->rsnIEdata[idx] &&
-			/* & if no more IE, */
-			   bytesLeft <= (uint16_t) (ieLen)) {
-			pe_debug("No IE (%d)", EID);
+		if (EID != pRsnIe->rsnIEdata[idx] &&
+		    /* & if no more IE, */
+		    bytesLeft <= (uint16_t)(ieLen))
 			return ret_val;
-		}
+
 		bytesLeft -= ieLen;
 		ieLen = pRsnIe->rsnIEdata[idx + 1] + 2;
 		idx += ieLen;
@@ -409,6 +408,13 @@ populate_dot11f_country(struct mac_context *mac,
 		wlan_reg_read_current_country(mac->psoc, code);
 
 		qdf_mem_copy(pDot11f->country, code, 2);
+
+		/* a wi-fi agile multiband AP shall include a country */
+		/* element in all beacon and probe response frames */
+		/* where the last octet of country string field is */
+		/* set to 0x04 */
+		if (mac->mlme_cfg->oce.oce_sap_enabled)
+			pDot11f->country[2] = 0x04;
 
 		if (len > MAX_SIZE_OF_TRIPLETS_IN_COUNTRY_IE) {
 			pe_err("len:%d is out of bounds, resetting", len);
@@ -709,8 +715,6 @@ populate_dot11f_ht_caps(struct mac_context *mac,
 	if (pe_session) {
 		disable_high_ht_mcs_2x2 =
 				mac->mlme_cfg->rates.disable_high_ht_mcs_2x2;
-		pe_debug("disable HT high MCS INI param[%d]",
-			 disable_high_ht_mcs_2x2);
 		if (pe_session->nss == NSS_1x1_MODE) {
 			pDot11f->supportedMCSSet[1] = 0;
 		} else if (IS_24G_CH(pe_session->currentOperChannel) &&
@@ -865,18 +869,15 @@ static void lim_log_qos_map_set(struct mac_context *mac,
 
 	pe_debug("num of dscp exceptions: %d",
 		pQosMapSet->num_dscp_exceptions);
-	for (i = 0; i < pQosMapSet->num_dscp_exceptions; i++) {
-		pe_debug("dscp value: %d",
-			pQosMapSet->dscp_exceptions[i][0]);
-		pe_debug("User priority value: %d",
-			pQosMapSet->dscp_exceptions[i][1]);
-	}
-	for (i = 0; i < 8; i++) {
-		pe_debug("dscp low for up %d: %d", i,
-			pQosMapSet->dscp_range[i][0]);
-		pe_debug("dscp high for up %d: %d", i,
-			pQosMapSet->dscp_range[i][1]);
-	}
+	for (i = 0; i < pQosMapSet->num_dscp_exceptions; i++)
+		pe_nofl_debug("dscp value: %d, User priority value: %d",
+			      pQosMapSet->dscp_exceptions[i][0],
+			      pQosMapSet->dscp_exceptions[i][1]);
+
+	for (i = 0; i < 8; i++)
+		pe_nofl_debug("For up %d: dscp low: %d, dscp high: %d", i,
+			       pQosMapSet->dscp_range[i][0],
+			       pQosMapSet->dscp_range[i][1]);
 }
 
 QDF_STATUS
@@ -1106,13 +1107,10 @@ populate_dot11f_ext_cap(struct mac_context *mac,
 		pe_debug("11MC support enabled");
 		pDot11f->num_bytes = DOT11F_IE_EXTCAP_MAX_LEN;
 	} else {
-		if (eLIM_AP_ROLE != pe_session->limSystemRole) {
-			pe_debug("11MC support enabled");
+		if (eLIM_AP_ROLE != pe_session->limSystemRole)
 			pDot11f->num_bytes = DOT11F_IE_EXTCAP_MAX_LEN;
-		} else  {
-			pe_debug("11MC support disabled");
+		else
 			pDot11f->num_bytes = DOT11F_IE_EXTCAP_MIN_LEN;
-		}
 	}
 
 	p_ext_cap = (struct s_ext_cap *)pDot11f->bytes;
@@ -1145,9 +1143,6 @@ populate_dot11f_ext_cap(struct mac_context *mac,
 	if (pe_session && pe_session->is_mbssid_enabled)
 		p_ext_cap->multi_bssid = 1;
 
-	if (mac->mlme_cfg->btm.btm_offload_config & BTM_OFFLOAD_ENABLED_MASK)
-		p_ext_cap->bss_transition = 1;
-
 	/* Need to calculate the num_bytes based on bits set */
 	if (pDot11f->present)
 		pDot11f->num_bytes = lim_compute_ext_cap_ie_length(pDot11f);
@@ -1155,13 +1150,24 @@ populate_dot11f_ext_cap(struct mac_context *mac,
 	return QDF_STATUS_SUCCESS;
 }
 
-void populate_dot11f_qcn_ie(tDot11fIEQCN_IE *pDot11f)
+void populate_dot11f_qcn_ie(struct mac_context *mac,
+			    tDot11fIEqcn_ie *qcn_ie,
+			    uint8_t attr_id)
 {
-	pDot11f->present = 1;
-	pDot11f->version[0] = QCN_IE_VERSION_SUBATTR_ID;
-	pDot11f->version[1] = QCN_IE_VERSION_SUBATTR_DATA_LEN;
-	pDot11f->version[2] = QCN_IE_VERSION_SUPPORTED;
-	pDot11f->version[3] = QCN_IE_SUBVERSION_SUPPORTED;
+	qcn_ie->present = 0;
+	if (mac->mlme_cfg->sta.qcn_ie_support &&
+	    ((attr_id == QCN_IE_ATTR_ID_ALL) ||
+	    (attr_id == QCN_IE_ATTR_ID_VERSION))) {
+		qcn_ie->present = 1;
+		qcn_ie->version_attr.present = 1;
+		qcn_ie->version_attr.version = QCN_IE_VERSION_SUPPORTED;
+		qcn_ie->version_attr.sub_version = QCN_IE_SUBVERSION_SUPPORTED;
+	}
+	if (mac->mlme_cfg->vht_caps.vht_cap_info.vht_mcs_10_11_supp) {
+		qcn_ie->present = 1;
+		qcn_ie->vht_mcs11_attr.present = 1;
+		qcn_ie->vht_mcs11_attr.vht_mcs_10_11_supp = 1;
+	}
 }
 
 QDF_STATUS
@@ -2501,16 +2507,9 @@ QDF_STATUS sir_convert_probe_frame2_struct(struct mac_context *mac,
 		}
 	}
 
-	if (pr->QCN_IE.present) {
-		pProbeResp->QCN_IE.is_present = true;
-
-		if (pr->QCN_IE.version[0] == QCN_IE_VERSION_SUBATTR_ID) {
-			pProbeResp->QCN_IE.version
-					= pr->QCN_IE.version[2];
-			pProbeResp->QCN_IE.sub_version
-					= pr->QCN_IE.version[3];
-		}
-	}
+	if (pr->qcn_ie.present)
+		qdf_mem_copy(&pProbeResp->qcn_ie, &pr->qcn_ie,
+			     sizeof(tDot11fIEqcn_ie));
 
 	if (pr->he_cap.present) {
 		pe_debug("11AX: HE cap IE present");
@@ -2715,6 +2714,9 @@ sir_convert_assoc_req_frame2_struct(struct mac_context *mac,
 			lim_log_vht_cap(mac, &pAssocReq->VHTCaps);
 		}
 	}
+	if (ar->qcn_ie.present)
+		qdf_mem_copy(&pAssocReq->qcn_ie, &ar->qcn_ie,
+			     sizeof(tDot11fIEqcn_ie));
 	if (ar->he_cap.present) {
 		qdf_mem_copy(&pAssocReq->he_cap, &ar->he_cap,
 			     sizeof(tDot11fIEhe_cap));
@@ -3167,6 +3169,9 @@ sir_convert_assoc_resp_frame2_struct(struct mac_context *mac,
 		lim_log_vht_operation(mac, &pAssocRsp->VHTOperation);
 	}
 
+	if (ar->qcn_ie.present)
+		qdf_mem_copy(&pAssocRsp->qcn_ie, &ar->qcn_ie,
+			     sizeof(tDot11fIEqcn_ie));
 	if (ar->he_cap.present) {
 		pe_debug("11AX: HE cap IE present");
 		qdf_mem_copy(&pAssocRsp->he_cap, &ar->he_cap,
@@ -3226,6 +3231,7 @@ sir_convert_reassoc_req_frame2_struct(struct mac_context *mac,
 			status, nFrame);
 		QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE, QDF_TRACE_LEVEL_ERROR,
 				   pFrame, nFrame);
+		qdf_mem_free(ar);
 		return QDF_STATUS_E_FAILURE;
 	} else if (DOT11F_WARNED(status)) {
 		pe_debug("There were warnings while unpacking a Re-association Request (0x%08x, %d bytes):",
@@ -3322,11 +3328,13 @@ sir_convert_reassoc_req_frame2_struct(struct mac_context *mac,
 
 	if (!pAssocReq->ssidPresent) {
 		pe_debug("Received Assoc without SSID IE");
+		qdf_mem_free(ar);
 		return QDF_STATUS_E_FAILURE;
 	}
 
 	if (!pAssocReq->suppRatesPresent && !pAssocReq->extendedRatesPresent) {
 		pe_debug("Received Assoc without supp rate IE");
+		qdf_mem_free(ar);
 		return QDF_STATUS_E_FAILURE;
 	}
 	/* Why no call to 'updateAssocReqFromPropCapability' here, like */
@@ -3706,8 +3714,7 @@ sir_parse_beacon_ie(struct mac_context *mac,
 		qdf_mem_free(pBies);
 		return QDF_STATUS_E_FAILURE;
 	} else if (DOT11F_WARNED(status)) {
-		pe_debug("There were warnings while unpacking Beacon IEs (0x%08x, %d bytes):",
-			status, nPayload);
+		pe_debug("warnings (0x%08x, %d bytes):", status, nPayload);
 	}
 	/* & "transliterate" from a 'tDot11fBeaconIEs' to a 'tSirProbeRespBeacon'... */
 	if (!pBies->SSID.present) {
@@ -3945,15 +3952,9 @@ sir_parse_beacon_ie(struct mac_context *mac,
 		}
 	}
 
-	if (pBies->QCN_IE.present) {
-		pBeaconStruct->QCN_IE.is_present = true;
-		if (pBies->QCN_IE.version[0] == QCN_IE_VERSION_SUBATTR_ID) {
-			pBeaconStruct->QCN_IE.version
-					= pBies->QCN_IE.version[2];
-			pBeaconStruct->QCN_IE.sub_version
-					= pBies->QCN_IE.version[3];
-		}
-	}
+	if (pBies->qcn_ie.present)
+		qdf_mem_copy(&pBeaconStruct->qcn_ie, &pBies->qcn_ie,
+			     sizeof(tDot11fIEqcn_ie));
 
 	if (pBies->he_cap.present) {
 		qdf_mem_copy(&pBeaconStruct->he_cap, &pBies->he_cap,
@@ -4318,16 +4319,9 @@ sir_convert_beacon_frame2_struct(struct mac_context *mac,
 		}
 	}
 
-	if (pBeacon->QCN_IE.present) {
-		pBeaconStruct->QCN_IE.is_present = true;
-		if (pBeacon->QCN_IE.version[0]
-					== QCN_IE_VERSION_SUBATTR_ID) {
-			pBeaconStruct->QCN_IE.version
-					= pBeacon->QCN_IE.version[2];
-			pBeaconStruct->QCN_IE.sub_version
-					= pBeacon->QCN_IE.version[3];
-		}
-	}
+	if (pBeacon->qcn_ie.present)
+		qdf_mem_copy(&pBeaconStruct->qcn_ie, &pBeacon->qcn_ie,
+			     sizeof(tDot11fIEqcn_ie));
 
 	if (pBeacon->he_cap.present) {
 		pe_debug("11AX: HE cap IE present");
@@ -5957,8 +5951,6 @@ QDF_STATUS populate_dot11f_he_caps(struct mac_context *mac_ctx, struct pe_sessio
 	} else {
 		he_cap->ppet.ppe_threshold.num_ppe_th = 0;
 	}
-
-	lim_log_he_cap(mac_ctx, he_cap);
 
 	return QDF_STATUS_SUCCESS;
 }

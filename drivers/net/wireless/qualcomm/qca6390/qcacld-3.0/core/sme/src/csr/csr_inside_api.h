@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -44,10 +44,11 @@
 #define CSR_ACTIVE_SCAN_LIST_CMD_TIMEOUT (1000*30)
 #endif
 /* ***************************************************************************
- * The MAX BSSID Count should be lower than the command timeout value and it
- * can be of a fraction of 1/3 to 1/2 of the total command timeout value.
+ * The MAX BSSID Count should be lower than the command timeout value.
+ * As in some case auth timeout can take upto 5 sec (in case of SAE auth) try
+ * (command timeout/5000 - 1) candidates.
  * ***************************************************************************/
-#define CSR_MAX_BSSID_COUNT     (SME_ACTIVE_LIST_CMD_TIMEOUT_VALUE/3000) - 2
+#define CSR_MAX_BSSID_COUNT     (SME_ACTIVE_LIST_CMD_TIMEOUT_VALUE/5000) - 1
 #define CSR_CUSTOM_CONC_GO_BI    100
 extern uint8_t csr_wpa_oui[][CSR_WPA_OUI_SIZE];
 bool csr_is_supported_channel(struct mac_context *mac, uint8_t channelId);
@@ -96,6 +97,7 @@ struct tag_csrscan_result {
 	/* Preferred auth type that matched with the profile. */
 	enum csr_akm_type authType;
 	int  bss_score;
+	uint8_t retry_count;
 
 	tCsrScanResultInfo Result;
 	/*
@@ -195,8 +197,6 @@ QDF_STATUS csr_scan_for_ssid(struct mac_context *mac, uint32_t sessionId,
  */
 QDF_STATUS csr_scan_abort_mac_scan(struct mac_context *mac, uint32_t vdev_id,
 				   uint32_t scan_id);
-QDF_STATUS csr_remove_nonscan_cmd_from_pending_list(struct mac_context *mac,
-			uint8_t sessionId, eSmeCommandType commandType);
 
 /* If fForce is true we will save the new String that is learn't. */
 /* Typically it will be true in case of Join or user initiated ioctl */
@@ -270,10 +270,12 @@ eRoamCmdStatus csr_get_roam_complete_status(struct mac_context *mac,
 					    uint32_t sessionId);
 /* pBand can be NULL if caller doesn't need to get it */
 QDF_STATUS csr_roam_issue_disassociate_cmd(struct mac_context *mac,
-					uint32_t sessionId,
-					   eCsrRoamDisconnectReason reason);
+					   uint32_t sessionId,
+					   eCsrRoamDisconnectReason reason,
+					   tSirMacReasonCodes mac_reason);
 QDF_STATUS csr_roam_disconnect_internal(struct mac_context *mac, uint32_t sessionId,
-					eCsrRoamDisconnectReason reason);
+					eCsrRoamDisconnectReason reason,
+					tSirMacReasonCodes mac_reason);
 /* pCommand may be NULL */
 void csr_roam_remove_duplicate_command(struct mac_context *mac, uint32_t sessionId,
 				       tSmeCmd *pCommand,
@@ -728,15 +730,17 @@ void csr_roam_free_connect_profile(tCsrRoamConnectedProfile *profile);
 QDF_STATUS csr_apply_channel_and_power_list(struct mac_context *mac);
 
 /*
- * csr_roam_disconnect() -
- *  To disconnect from a network
+ * csr_roam_disconnect() - To disconnect from a network
+ * @mac: pointer to mac context
+ * @session_id: Session ID
+ * @reason: CSR disconnect reason code as per @enum eCsrRoamDisconnectReason
+ * @mac_reason: Mac Disconnect reason code as per @enum eSirMacReasonCodes
  *
- * Reason -- To indicate the reason for disconnecting. Currently, only
- * eCSR_DISCONNECT_REASON_MIC_ERROR is meanful.
  * Return QDF_STATUS
  */
-QDF_STATUS csr_roam_disconnect(struct mac_context *mac, uint32_t sessionId,
-			       eCsrRoamDisconnectReason reason);
+QDF_STATUS csr_roam_disconnect(struct mac_context *mac, uint32_t session_id,
+			       eCsrRoamDisconnectReason reason,
+			       tSirMacReasonCodes mac_reason);
 
 /* This function is used to stop a BSS. It is similar of csr_roamIssueDisconnect
  * but this function doesn't have any logic other than blindly trying to stop
@@ -818,8 +822,6 @@ QDF_STATUS csr_dequeue_roam_command(struct mac_context *mac,
 				enum csr_roam_reason reason,
 				uint8_t session_id);
 void csr_init_occupied_channels_list(struct mac_context *mac, uint8_t sessionId);
-bool csr_neighbor_roam_is_new_connected_profile(struct mac_context *mac,
-						uint8_t sessionId);
 bool csr_neighbor_roam_connected_profile_match(struct mac_context *mac,
 					       uint8_t sessionId,
 					       struct tag_csrscan_result
@@ -836,6 +838,26 @@ QDF_STATUS csr_roam_del_pmkid_from_cache(struct mac_context *mac,
 					 uint32_t sessionId,
 					 tPmkidCacheInfo *pmksa,
 					 bool flush_cache);
+
+#if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
+/**
+ * csr_clear_sae_single_pmk - API to clear single_pmk_info cache
+ * @pmac: mac context
+ * @vdev_id: session id
+ * @pmksa: pmk info
+ *
+ * Return : None
+ */
+void csr_clear_sae_single_pmk(struct mac_context *mac,
+			      uint8_t vdev_id, tPmkidCacheInfo *pmksa);
+
+#else
+static inline void
+csr_clear_sae_single_pmk(struct mac_context *mac, uint8_t vdev_id,
+			 tPmkidCacheInfo *pmksa)
+{
+}
+#endif
 
 QDF_STATUS csr_send_ext_change_channel(struct mac_context *mac_ctx,
 				uint32_t channel, uint8_t session_id);

@@ -823,6 +823,16 @@ QDF_STATUS wlan_mlme_cfg_set_he_ul_mumimo(struct wlan_objmgr_psoc *psoc,
 					  uint32_t value);
 
 /**
+ * mlme_cfg_get_he_caps() - Get the HE capability info
+ * @psoc: pointer to psoc object
+ * @he_cap: Caps that needs to be filled.
+ *
+ * Return: QDF Status
+ */
+QDF_STATUS mlme_cfg_get_he_caps(struct wlan_objmgr_psoc *psoc,
+				tDot11fIEhe_cap *he_cap);
+
+/**
  * wlan_mlme_cfg_get_enable_ul_mimo() - Get the HE Ul mimo
  * @psoc: pointer to psoc object
  * @value: Value that needs to be set from the caller
@@ -2027,16 +2037,6 @@ QDF_STATUS
 wlan_mlme_set_11d_enabled(struct wlan_objmgr_psoc *psoc, bool value);
 
 /**
- * wlan_mlme_is_change_channel_bandwidth_enabled() - get the
- * enable_change_channel_bandwidth flag
- * @psoc: psoc context
- *
- * Return: true if enabled
- */
-bool
-wlan_mlme_is_change_channel_bandwidth_enabled(struct wlan_objmgr_psoc *psoc);
-
-/**
  * wlan_mlme_get_sta_miracast_mcc_rest_time() - Get STA/MIRACAST MCC rest time
  *
  * @psoc: pointer to psoc object
@@ -2117,7 +2117,7 @@ wlan_mlme_get_mcc_feature(struct wlan_objmgr_psoc *psoc,
 QDF_STATUS wlan_mlme_get_rrm_enabled(struct wlan_objmgr_psoc *psoc,
 				     bool *value);
 
-/*
+/**
  * wlan_mlme_get_dtim_selection_diversity() - get dtim selection diversity
  * bitmap
  * @psoc: pointer to psoc object
@@ -2193,7 +2193,7 @@ QDF_STATUS wlan_mlme_override_bmps_imps(struct wlan_objmgr_psoc *psoc);
 QDF_STATUS wlan_mlme_is_imps_enabled(struct wlan_objmgr_psoc *psoc,
 				     bool *value);
 
-/*
+/**
  * wlan_mlme_get_wps_uuid() - get the wps uuid string
  * @wps_params:   pointer to mlme wps parameters structure
  * @data:          data to which the parameter is to be copied
@@ -2204,7 +2204,7 @@ QDF_STATUS wlan_mlme_is_imps_enabled(struct wlan_objmgr_psoc *psoc,
 void
 wlan_mlme_get_wps_uuid(struct wlan_mlme_wps_params *wps_params, uint8_t *data);
 
-/*
+/**
  * wlan_mlme_get_self_gen_frm_pwr() - get self gen frm pwr
  * @psoc: pointer to psoc object
  * @val:  Pointer to the value which will be filled for the caller
@@ -2214,6 +2214,18 @@ wlan_mlme_get_wps_uuid(struct wlan_mlme_wps_params *wps_params, uint8_t *data);
 QDF_STATUS
 wlan_mlme_get_self_gen_frm_pwr(struct wlan_objmgr_psoc *psoc,
 			       uint32_t *value);
+
+/**
+ * wlan_mlme_get_bmiss_skip_full_scan_value() - To get value of
+ * bmiss_skip_full_scan ini
+ * @psoc: pointer to psoc object
+ * @val:  Pointer to the value which will be filled for the caller
+ *
+ * Return: QDF Status
+ */
+QDF_STATUS
+wlan_mlme_get_bmiss_skip_full_scan_value(struct wlan_objmgr_psoc *psoc,
+					 bool *value);
 
 /**
  * mlme_get_peer_phymode() - get phymode of peer
@@ -2226,4 +2238,172 @@ wlan_mlme_get_self_gen_frm_pwr(struct wlan_objmgr_psoc *psoc,
 QDF_STATUS
 mlme_get_peer_phymode(struct wlan_objmgr_psoc *psoc, uint8_t *mac,
 		      enum wlan_phymode *peer_phymode);
+
+/**
+ * mlme_set_tgt_wpa3_roam_cap() - Set the target WPA3 roam support
+ * to mlme
+ * @psoc: pointer to PSOC object
+ * @akm_bitmap: Bitmap of akm suites supported for roaming by the firmware
+ *
+ * Return: QDF Status
+ */
+QDF_STATUS mlme_set_tgt_wpa3_roam_cap(struct wlan_objmgr_psoc *psoc,
+				      uint32_t akm_bitmap);
+/**
+ * wlan_mlme_get_ignore_fw_reg_offload_ind() - Get the
+ * ignore_fw_reg_offload_ind ini
+ * @psoc: pointer to psoc object
+ * @disabled: output pointer to hold user config
+ *
+ * Return: QDF Status
+ */
+QDF_STATUS
+wlan_mlme_get_ignore_fw_reg_offload_ind(struct wlan_objmgr_psoc *psoc,
+					bool *disabled);
+
+/**
+ * wlan_mlme_get_mgmt_max_retry() - Get the
+ * max mgmt retry
+ * @psoc: pointer to psoc object
+ * @max_retry: output pointer to hold user config
+ *
+ * Return: QDF Status
+ */
+QDF_STATUS
+wlan_mlme_get_mgmt_max_retry(struct wlan_objmgr_psoc *psoc,
+			     uint8_t *max_retry);
+/**
+ * wlan_mlme_get_status_ring_buffer() - Get the
+ * status of ring buffer
+ * @psoc: pointer to psoc object
+ * @enable_ring_buffer: output pointer to point the configured value of
+ * ring buffer
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_mlme_get_status_ring_buffer(struct wlan_objmgr_psoc *psoc,
+				 bool *enable_ring_buffer);
+
+/**
+ * mlme_get_roam_trigger_str() - Get the string for enum
+ * WMI_ROAM_TRIGGER_REASON_ID reason.
+ * @roam_scan_trigger: roam scan trigger ID
+ *
+ *  Return: Meaningful string from enum WMI_ROAM_TRIGGER_REASON_ID
+ */
+char *mlme_get_roam_trigger_str(uint32_t roam_scan_trigger);
+
+/**
+ * mlme_get_converted_timestamp() - Return time of the day
+ * from timestamp
+ * @timestamp:    Timestamp value in milliseconds
+ * @time:         Output buffer to fill time into
+ *
+ * Return: Time of the day in [HH:MM:SS.uS]
+ */
+void mlme_get_converted_timestamp(uint32_t timestamp, char *time);
+
+#if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
+/**
+ * wlan_mlme_set_sae_single_pmk_bss_cap - API to set WPA3 single pmk AP IE
+ * @psoc: Pointer to psoc object
+ * @vdev_id: vdev id
+ * @val: value to be set
+ *
+ * Return : None
+ */
+void wlan_mlme_set_sae_single_pmk_bss_cap(struct wlan_objmgr_psoc *psoc,
+					  uint8_t vdev_id, bool val);
+
+/**
+ * wlan_mlme_update_sae_single_pmk - API to update mlme_pmkid_info
+ * @vdev: vdev object
+ * @sae_single_pmk: pointer to sae_single_pmk_info struct
+ *
+ * Return : None
+ */
+void
+wlan_mlme_update_sae_single_pmk(struct wlan_objmgr_vdev *vdev,
+				struct mlme_pmk_info *sae_single_pmk);
+
+/**
+ * wlan_mlme_get_sae_single_pmk_info - API to get mlme_pmkid_info
+ * @vdev: vdev object
+ * @pmksa: pointer to PMKSA struct
+ *
+ * Return : None
+ */
+void
+wlan_mlme_get_sae_single_pmk_info(struct wlan_objmgr_vdev *vdev,
+				  struct wlan_mlme_sae_single_pmk *pmksa);
+/**
+ * wlan_mlme_clear_sae_single_pmk_info - API to clear mlme_pmkid_info ap caps
+ * @vdev: vdev object
+ * @pmk : pmk info to clear
+ *
+ * Return : None
+ */
+void wlan_mlme_clear_sae_single_pmk_info(struct wlan_objmgr_vdev *vdev,
+					 struct mlme_pmk_info *pmk);
+#else
+static inline void
+wlan_mlme_set_sae_single_pmk_bss_cap(struct wlan_objmgr_psoc *psoc,
+				     uint8_t vdev_id, bool val)
+{
+}
+
+static inline void
+wlan_mlme_update_sae_single_pmk(struct wlan_objmgr_vdev *vdev,
+				struct mlme_pmk_info *sae_single_pmk)
+{
+}
+
+static inline void
+wlan_mlme_get_sae_single_pmk_info(struct wlan_objmgr_vdev *vdev,
+				  struct wlan_mlme_sae_single_pmk *pmksa)
+{
+}
+
+static inline
+void wlan_mlme_clear_sae_single_pmk_info(struct wlan_objmgr_vdev *vdev,
+					 struct mlme_pmk_info *pmk)
+{
+}
+#endif
+
+/**
+ * mlme_get_roam_fail_reason_str() - Get fail string from enum
+ * WMI_ROAM_FAIL_REASON_ID
+ * @result:   Roam fail reason
+ *
+ * Return: Meaningful string from enum
+ */
+char *mlme_get_roam_fail_reason_str(uint32_t result);
+
+/**
+ * mlme_get_sub_reason_str() - Get roam trigger sub reason from enum
+ * WMI_ROAM_TRIGGER_SUB_REASON_ID
+ * @sub_reason: Sub reason value
+ *
+ * Return: Meaningful string from enum WMI_ROAM_TRIGGER_SUB_REASON_ID
+ */
+char *mlme_get_sub_reason_str(uint32_t sub_reason);
+
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+/**
+ * wlan_mlme_get_roaming_triggers  - Get the roaming triggers bitmap
+ * @psoc: Pointer to PSOC object
+ *
+ * Return: Roaming triggers value
+ */
+uint32_t wlan_mlme_get_roaming_triggers(struct wlan_objmgr_psoc *psoc);
+#else
+static inline
+uint32_t wlan_mlme_get_roaming_triggers(struct wlan_objmgr_psoc *psoc)
+{
+	return 0xFFFF;
+}
+#endif
+
 #endif /* _WLAN_MLME_API_H_ */

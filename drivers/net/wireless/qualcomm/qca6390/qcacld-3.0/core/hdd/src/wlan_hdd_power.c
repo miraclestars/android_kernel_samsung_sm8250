@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -542,6 +542,33 @@ static void hdd_disable_hw_filter(struct hdd_adapter *adapter)
 	hdd_exit();
 }
 
+static void hdd_enable_action_frame_patterns(struct hdd_adapter *adapter)
+{
+	QDF_STATUS status;
+
+	hdd_enter();
+
+	status = ucfg_pmo_enable_action_frame_patterns(adapter->vdev,
+						       QDF_SYSTEM_SUSPEND);
+	if (QDF_IS_STATUS_ERROR(status))
+		hdd_info("Failed to enable action frame patterns");
+
+	hdd_exit();
+}
+
+static void hdd_disable_action_frame_patterns(struct hdd_adapter *adapter)
+{
+	QDF_STATUS status;
+
+	hdd_enter();
+
+	status = ucfg_pmo_disable_action_frame_patterns(adapter->vdev);
+	if (QDF_IS_STATUS_ERROR(status))
+		hdd_info("Failed to disable action frame patterns");
+
+	hdd_exit();
+}
+
 void hdd_enable_host_offloads(struct hdd_adapter *adapter,
 	enum pmo_offload_trigger trigger)
 {
@@ -563,7 +590,9 @@ void hdd_enable_host_offloads(struct hdd_adapter *adapter,
 	hdd_enable_arp_offload(adapter, trigger);
 	hdd_enable_ns_offload(adapter, trigger);
 	hdd_enable_mc_addr_filtering(adapter, trigger);
-	hdd_enable_hw_filter(adapter);
+	if (adapter->device_mode != QDF_NDI_MODE)
+		hdd_enable_hw_filter(adapter);
+	hdd_enable_action_frame_patterns(adapter);
 out:
 	hdd_exit();
 
@@ -591,6 +620,7 @@ void hdd_disable_host_offloads(struct hdd_adapter *adapter,
 	hdd_disable_ns_offload(adapter, trigger);
 	hdd_disable_mc_addr_filtering(adapter, trigger);
 	hdd_disable_hw_filter(adapter);
+	hdd_disable_action_frame_patterns(adapter);
 out:
 	hdd_exit();
 
@@ -859,6 +889,45 @@ int wlan_hdd_ipv4_changed(struct notifier_block *nb,
 	return NOTIFY_DONE;
 }
 
+#ifdef FEATURE_RUNTIME_PM
+int wlan_hdd_pm_qos_notify(struct notifier_block *nb, unsigned long curr_val,
+			   void *context)
+{
+	struct hdd_context *hdd_ctx = container_of(nb, struct hdd_context,
+						   pm_qos_notifier);
+	void *hif_ctx;
+
+	if (hdd_ctx->driver_status != DRIVER_MODULES_ENABLED) {
+		hdd_debug_rl("Driver Module closed; skipping pm qos notify");
+		return 0;
+	}
+
+	hif_ctx = cds_get_context(QDF_MODULE_ID_HIF);
+	if (!hif_ctx) {
+		hdd_err("Hif context is Null");
+		return -EINVAL;
+	}
+
+	hdd_debug("PM QOS update: runtime_pm_prevented %d Current value: %ld",
+		  hdd_ctx->runtime_pm_prevented, curr_val);
+	qdf_spin_lock_irqsave(&hdd_ctx->pm_qos_lock);
+
+	if (!hdd_ctx->runtime_pm_prevented &&
+	    curr_val != PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE) {
+		hif_pm_runtime_get_noresume(hif_ctx, RTPM_ID_QOS_NOTIFY);
+		hdd_ctx->runtime_pm_prevented = true;
+	} else if (hdd_ctx->runtime_pm_prevented &&
+		   curr_val == PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE) {
+		hif_pm_runtime_put(hif_ctx, RTPM_ID_QOS_NOTIFY);
+		hdd_ctx->runtime_pm_prevented = false;
+	}
+
+	qdf_spin_unlock_irqrestore(&hdd_ctx->pm_qos_lock);
+
+	return NOTIFY_DONE;
+}
+#endif
+
 /**
  * hdd_get_ipv4_local_interface() - get ipv4 local interafce from iface list
  * @adapter: Adapter context for which ARP offload is to be configured
@@ -898,11 +967,9 @@ void hdd_enable_arp_offload(struct hdd_adapter *adapter,
 	struct pmo_arp_req *arp_req;
 	struct in_ifaddr *ifa;
 
-	hdd_enter();
-
 	arp_req = qdf_mem_malloc(sizeof(*arp_req));
 	if (!arp_req)
-		goto out;
+		return;
 
 	arp_req->psoc = psoc;
 	arp_req->vdev_id = adapter->vdev_id;
@@ -933,9 +1000,6 @@ void hdd_enable_arp_offload(struct hdd_adapter *adapter,
 
 free_req:
 	qdf_mem_free(arp_req);
-
-out:
-	hdd_exit();
 }
 
 void hdd_disable_arp_offload(struct hdd_adapter *adapter,
@@ -943,11 +1007,10 @@ void hdd_disable_arp_offload(struct hdd_adapter *adapter,
 {
 	QDF_STATUS status;
 
-	hdd_enter();
 	status = ucfg_pmo_flush_arp_offload_req(adapter->vdev);
 	if (status != QDF_STATUS_SUCCESS) {
 		hdd_err("Failed to flush arp Offload");
-		goto out;
+		return;
 	}
 
 	status = ucfg_pmo_disable_arp_offload_in_fwr(adapter->vdev,
@@ -957,8 +1020,6 @@ void hdd_disable_arp_offload(struct hdd_adapter *adapter,
 			PMO_OFFLOAD_DISABLE);
 	else
 		hdd_info("fail to disable arp offload");
-out:
-	hdd_exit();
 }
 
 void hdd_enable_mc_addr_filtering(struct hdd_adapter *adapter,
@@ -967,22 +1028,18 @@ void hdd_enable_mc_addr_filtering(struct hdd_adapter *adapter,
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 	QDF_STATUS status;
 
-	hdd_enter();
-
 	if (wlan_hdd_validate_context(hdd_ctx))
-		goto out;
+		return;
 
 	if (!hdd_adapter_is_connected_sta(adapter))
-		goto out;
+		return;
 
 	status = ucfg_pmo_enable_mc_addr_filtering_in_fwr(hdd_ctx->psoc,
 							  adapter->vdev_id,
 							  trigger);
 	if (QDF_IS_STATUS_ERROR(status))
-		hdd_err("failed to enable mc list; status:%d", status);
+		hdd_debug("failed to enable mc list; status:%d", status);
 
-out:
-	hdd_exit();
 }
 
 void hdd_disable_mc_addr_filtering(struct hdd_adapter *adapter,
@@ -991,31 +1048,24 @@ void hdd_disable_mc_addr_filtering(struct hdd_adapter *adapter,
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 	QDF_STATUS status;
 
-	hdd_enter();
-
 	if (wlan_hdd_validate_context(hdd_ctx))
-		goto out;
+		return;
 
 	if (!hdd_adapter_is_connected_sta(adapter))
-		goto out;
+		return;
 
 	status = ucfg_pmo_disable_mc_addr_filtering_in_fwr(hdd_ctx->psoc,
 							   adapter->vdev_id,
 							   trigger);
 	if (QDF_IS_STATUS_ERROR(status))
 		hdd_err("failed to disable mc list; status:%d", status);
-
-out:
-	hdd_exit();
 }
 
 int hdd_cache_mc_addr_list(struct pmo_mc_addr_list_params *mc_list_config)
 {
 	QDF_STATUS status;
 
-	hdd_enter();
 	status = ucfg_pmo_cache_mc_addr_list(mc_list_config);
-	hdd_exit();
 
 	return qdf_status_to_os_return(status);
 }
@@ -1026,8 +1076,6 @@ void hdd_disable_and_flush_mc_addr_list(struct hdd_adapter *adapter,
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 	QDF_STATUS status;
 
-	hdd_enter();
-
 	if (!hdd_adapter_is_connected_sta(adapter))
 		goto flush_mc_list;
 
@@ -1036,15 +1084,14 @@ void hdd_disable_and_flush_mc_addr_list(struct hdd_adapter *adapter,
 							   adapter->vdev_id,
 							   trigger);
 	if (QDF_IS_STATUS_ERROR(status))
-		hdd_err("failed to disable mc list; status:%d", status);
+		hdd_debug("failed to disable mc list; status:%d", status);
 
 flush_mc_list:
 	status = ucfg_pmo_flush_mc_addr_list(hdd_ctx->psoc,
 					     adapter->vdev_id);
 	if (QDF_IS_STATUS_ERROR(status))
-		hdd_err("failed to flush mc list; status:%d", status);
+		hdd_debug("failed to flush mc list; status:%d", status);
 
-	hdd_exit();
 }
 
 /**
@@ -1234,7 +1281,7 @@ QDF_STATUS hdd_wlan_shutdown(void)
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	hdd_bus_bw_compute_timer_stop(hdd_ctx);
+	hdd_set_connection_in_progress(false);
 	policy_mgr_clear_concurrent_session_count(hdd_ctx->psoc);
 
 	hdd_debug("Invoking packetdump deregistration API");
@@ -1248,6 +1295,8 @@ QDF_STATUS hdd_wlan_shutdown(void)
 	}
 
 	wlan_hdd_rx_thread_resume(hdd_ctx);
+
+	dp_txrx_resume(cds_get_context(QDF_MODULE_ID_SOC));
 
 	/*
 	 * After SSR, FW clear its txrx stats. In host,
@@ -1281,7 +1330,6 @@ QDF_STATUS hdd_wlan_shutdown(void)
 
 	hdd_wlan_stop_modules(hdd_ctx, false);
 
-	hdd_bus_bandwidth_deinit(hdd_ctx);
 	hdd_lpass_notify_stop(hdd_ctx);
 
 	hdd_info("WLAN driver shutdown complete");
@@ -1411,7 +1459,6 @@ QDF_STATUS hdd_wlan_re_init(void)
 		hdd_err("Failed to get adapter");
 
 	hdd_dp_trace_init(hdd_ctx->config);
-	hdd_bus_bandwidth_init(hdd_ctx);
 
 	ret = hdd_wlan_start_modules(hdd_ctx, true);
 	if (ret) {
@@ -1452,7 +1499,6 @@ QDF_STATUS hdd_wlan_re_init(void)
 	return QDF_STATUS_SUCCESS;
 
 err_re_init:
-	hdd_bus_bandwidth_deinit(hdd_ctx);
 	qdf_dp_trace_deinit();
 
 err_ctx_null:
@@ -1612,8 +1658,10 @@ static int __wlan_hdd_cfg80211_resume_wlan(struct wiphy *wiphy)
 		goto exit_with_code;
 	}
 
-	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
-		hdd_err("Command not allowed in FTM mode");
+	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam() ||
+	    QDF_GLOBAL_MONITOR_MODE == hdd_get_conparam()) {
+		hdd_err("Command not allowed in mode %d",
+			hdd_get_conparam());
 		exit_code = -EINVAL;
 		goto exit_with_code;
 	}
@@ -1635,8 +1683,6 @@ static int __wlan_hdd_cfg80211_resume_wlan(struct wiphy *wiphy)
 		goto exit_with_code;
 	}
 
-	pld_request_bus_bandwidth(hdd_ctx->parent_dev, PLD_BUS_WIDTH_MEDIUM);
-
 	status = hdd_resume_wlan();
 	if (status != QDF_STATUS_SUCCESS) {
 		exit_code = 0;
@@ -1647,7 +1693,13 @@ static int __wlan_hdd_cfg80211_resume_wlan(struct wiphy *wiphy)
 		scheduler_resume();
 		hdd_ctx->is_scheduler_suspended = false;
 	}
-
+	/* Resume all components registered to pmo */
+	status = ucfg_pmo_resume_all_components(hdd_ctx->psoc,
+						QDF_SYSTEM_SUSPEND);
+	if (status != QDF_STATUS_SUCCESS) {
+		exit_code = 0;
+		goto exit_with_code;
+	}
 	/* Resume tlshim Rx thread */
 	if (hdd_ctx->enable_rxthread)
 		wlan_hdd_rx_thread_resume(hdd_ctx);
@@ -1669,6 +1721,28 @@ exit_with_code:
 	return exit_code;
 }
 
+static int _wlan_hdd_cfg80211_resume_wlan(struct wiphy *wiphy)
+{
+	void *hif_ctx;
+	struct hdd_context *hdd_ctx = wiphy_priv(wiphy);
+	int errno;
+
+	errno = wlan_hdd_validate_context(hdd_ctx);
+	if (errno)
+		return errno;
+
+	if (hdd_ctx->driver_status != DRIVER_MODULES_ENABLED) {
+		hdd_debug("Driver Modules not Enabled ");
+		return 0;
+	}
+
+	hif_ctx = cds_get_context(QDF_MODULE_ID_HIF);
+	errno = __wlan_hdd_cfg80211_resume_wlan(wiphy);
+	hif_pm_runtime_put(hif_ctx, RTPM_ID_SUSPEND_RESUME);
+
+	return errno;
+}
+
 int wlan_hdd_cfg80211_resume_wlan(struct wiphy *wiphy)
 {
 	struct osif_psoc_sync *psoc_sync;
@@ -1678,7 +1752,7 @@ int wlan_hdd_cfg80211_resume_wlan(struct wiphy *wiphy)
 	if (errno)
 		return errno;
 
-	errno = __wlan_hdd_cfg80211_resume_wlan(wiphy);
+	errno = _wlan_hdd_cfg80211_resume_wlan(wiphy);
 
 	osif_psoc_sync_op_stop(psoc_sync);
 
@@ -1717,8 +1791,10 @@ static int __wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
 
 	hdd_enter();
 
-	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
-		hdd_err("Command not allowed in FTM mode");
+	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam() ||
+	    QDF_GLOBAL_MONITOR_MODE == hdd_get_conparam()) {
+		hdd_err("Command not allowed in mode %d",
+			hdd_get_conparam());
 		return -EINVAL;
 	}
 
@@ -1727,7 +1803,7 @@ static int __wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
 		return rc;
 
 	if (hdd_ctx->config->is_wow_disabled) {
-		hdd_err("wow is disabled");
+		hdd_info_rl("wow is disabled");
 		return -EINVAL;
 	}
 
@@ -1779,19 +1855,9 @@ static int __wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
 	ucfg_p2p_cleanup_tx_by_psoc(hdd_ctx->psoc);
 	ucfg_p2p_cleanup_roc_by_psoc(hdd_ctx->psoc);
 
-	/* Stop ongoing scan on each interface */
-	hdd_for_each_adapter(hdd_ctx, adapter) {
-		if (sme_neighbor_middle_of_roaming(mac_handle,
-		    adapter->vdev_id) ||
-		    hdd_is_roaming_in_progress(hdd_ctx)) {
-			hdd_err("Roaming in progress, do not allow suspend");
-			wlan_hdd_inc_suspend_stats(hdd_ctx,
-						   SUSPEND_FAIL_ROAM);
-			return -EAGAIN;
-		}
-
-		wlan_abort_scan(hdd_ctx->pdev, INVAL_PDEV_ID,
-				adapter->vdev_id, INVALID_SCAN_ID, false);
+	if (hdd_is_connection_in_progress(NULL, NULL)) {
+		hdd_err_rl("Connection is in progress, rejecting suspend");
+		return -EINVAL;
 	}
 
 	/* flush any pending powersave timers */
@@ -1800,6 +1866,16 @@ static int __wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
 			continue;
 
 		sme_ps_timer_flush_sync(mac_handle, adapter->vdev_id);
+	}
+
+	/*
+	 * Suspend all components registered to pmo, abort ongoing scan and
+	 * don't allow new scan any more before scheduler thread suspended.
+	 */
+	if (ucfg_pmo_suspend_all_components(hdd_ctx->psoc,
+					    QDF_SYSTEM_SUSPEND)) {
+		hdd_err("Some components not ready to suspend!");
+		return -EAGAIN;
 	}
 
 	/*
@@ -1832,8 +1908,10 @@ static int __wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
 			goto resume_ol_rx;
 	}
 
-	if (hdd_ctx->enable_dp_rx_threads)
-		dp_txrx_suspend(cds_get_context(QDF_MODULE_ID_SOC));
+	if (hdd_ctx->enable_dp_rx_threads) {
+		if (dp_txrx_suspend(cds_get_context(QDF_MODULE_ID_SOC)))
+			goto resume_ol_rx;
+	}
 
 	qdf_mtrace(QDF_MODULE_ID_HDD, QDF_MODULE_ID_HDD,
 		   TRACE_CODE_HDD_CFG80211_SUSPEND_WLAN,
@@ -1845,8 +1923,6 @@ static int __wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
 	}
 
 	hdd_ctx->is_wiphy_suspended = true;
-
-	pld_request_bus_bandwidth(hdd_ctx->parent_dev, PLD_BUS_WIDTH_NONE);
 
 	hdd_exit();
 	return 0;
@@ -1866,6 +1942,36 @@ resume_tx:
 
 }
 
+static int _wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
+					   struct cfg80211_wowlan *wow)
+{
+	void *hif_ctx;
+	struct hdd_context *hdd_ctx = wiphy_priv(wiphy);
+	int errno;
+
+	errno = wlan_hdd_validate_context(hdd_ctx);
+	if (errno)
+		return errno;
+
+	if (hdd_ctx->driver_status != DRIVER_MODULES_ENABLED) {
+		hdd_debug("Driver Modules not Enabled ");
+		return 0;
+	}
+
+	hif_ctx = cds_get_context(QDF_MODULE_ID_HIF);
+	errno = hif_pm_runtime_get_sync(hif_ctx, RTPM_ID_SUSPEND_RESUME);
+	if (errno)
+		return errno;
+
+	errno = __wlan_hdd_cfg80211_suspend_wlan(wiphy, wow);
+	if (errno) {
+		hif_pm_runtime_put(hif_ctx, RTPM_ID_SUSPEND_RESUME);
+		return errno;
+	}
+
+	return errno;
+}
+
 int wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
 				   struct cfg80211_wowlan *wow)
 {
@@ -1876,7 +1982,7 @@ int wlan_hdd_cfg80211_suspend_wlan(struct wiphy *wiphy,
 	if (errno)
 		return errno;
 
-	errno = __wlan_hdd_cfg80211_suspend_wlan(wiphy, wow);
+	errno = _wlan_hdd_cfg80211_suspend_wlan(wiphy, wow);
 
 	osif_psoc_sync_op_stop(psoc_sync);
 
@@ -2020,13 +2126,21 @@ static int __wlan_hdd_cfg80211_set_txpower(struct wiphy *wiphy,
 {
 	struct hdd_context *hdd_ctx = (struct hdd_context *) wiphy_priv(wiphy);
 	mac_handle_t mac_handle;
+	struct hdd_adapter *adapter;
 	struct qdf_mac_addr bssid = QDF_MAC_ADDR_BCAST_INIT;
-	struct qdf_mac_addr selfMac = QDF_MAC_ADDR_BCAST_INIT;
+	struct qdf_mac_addr selfmac;
 	QDF_STATUS status;
 	int errno;
 	int dbm;
 
 	hdd_enter();
+
+	if (!wdev) {
+		hdd_err("wdev is null, set tx power failed");
+		return -EIO;
+	}
+
+	adapter = WLAN_HDD_GET_PRIV_PTR(wdev->netdev);
 
 	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
 		hdd_err("Command not allowed in FTM mode");
@@ -2040,6 +2154,23 @@ static int __wlan_hdd_cfg80211_set_txpower(struct wiphy *wiphy,
 	errno = wlan_hdd_validate_context(hdd_ctx);
 	if (errno)
 		return errno;
+
+	if (wlan_hdd_validate_vdev_id(adapter->vdev_id))
+		return -EINVAL;
+
+	if (adapter->device_mode == QDF_SAP_MODE ||
+	    adapter->device_mode == QDF_P2P_GO_MODE) {
+		qdf_copy_macaddr(&bssid, &adapter->mac_addr);
+	} else {
+		struct hdd_station_ctx *sta_ctx =
+			WLAN_HDD_GET_STATION_CTX_PTR(adapter);
+
+		if (eConnectionState_Associated ==
+		    sta_ctx->conn_info.conn_state)
+			qdf_copy_macaddr(&bssid, &sta_ctx->conn_info.bssid);
+	}
+
+	qdf_copy_macaddr(&selfmac, &adapter->mac_addr);
 
 	mac_handle = hdd_ctx->mac_handle;
 
@@ -2068,7 +2199,7 @@ static int __wlan_hdd_cfg80211_set_txpower(struct wiphy *wiphy,
 	/* Fall through */
 	case NL80211_TX_POWER_LIMITED:
 	/* Limit TX power by the mBm parameter */
-		status = sme_set_max_tx_power(mac_handle, bssid, selfMac, dbm);
+		status = sme_set_max_tx_power(mac_handle, bssid, selfmac, dbm);
 		if (QDF_IS_STATUS_ERROR(status)) {
 			hdd_err("Setting maximum tx power failed, %d", status);
 			return -EIO;
@@ -2136,6 +2267,7 @@ static int __wlan_hdd_cfg80211_get_txpower(struct wiphy *wiphy,
 	struct net_device *ndev = wdev->netdev;
 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(ndev);
 	int status;
+	struct hdd_station_ctx *sta_ctx;
 
 	hdd_enter_dev(ndev);
 
@@ -2154,22 +2286,30 @@ static int __wlan_hdd_cfg80211_get_txpower(struct wiphy *wiphy,
 	status = wlan_hdd_validate_vdev_id(adapter->vdev_id);
 	if (status)
 		return status;
-
-	if (adapter->device_mode == QDF_STA_MODE ||
-	    adapter->device_mode == QDF_P2P_CLIENT_MODE) {
-		struct hdd_station_ctx *sta_ctx;
-
+	switch (adapter->device_mode) {
+	case QDF_STA_MODE:
+	case QDF_P2P_CLIENT_MODE:
 		sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
 		if (sta_ctx->hdd_reassoc_scenario) {
 			hdd_debug("Roaming is in progress, rej this req");
 			return -EINVAL;
 		}
-
 		if (sta_ctx->conn_info.conn_state !=
 		    eConnectionState_Associated) {
 			hdd_debug("Not associated");
 			return 0;
 		}
+		break;
+	case QDF_SAP_MODE:
+	case QDF_P2P_GO_MODE:
+		if (!test_bit(SOFTAP_BSS_STARTED, &adapter->event_flags)) {
+			hdd_debug("SAP is not started yet");
+			return 0;
+		}
+		break;
+	default:
+		hdd_debug_rl("Current interface is not supported for get tx_power");
+		return 0;
 	}
 
 	if (hdd_ctx->driver_status != DRIVER_MODULES_ENABLED) {

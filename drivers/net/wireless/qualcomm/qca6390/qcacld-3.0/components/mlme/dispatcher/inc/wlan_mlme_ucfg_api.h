@@ -1005,6 +1005,16 @@ ucfg_mlme_get_roaming_offload(struct wlan_objmgr_psoc *psoc,
 			      bool *val);
 
 /**
+ * ucfg_mlme_get_roam_disable_config() - Get sta roam disable value
+ * @psoc: pointer to psoc object
+ * @val: Pointer to bitmap of interfaces for those sta roaming is disabled
+ *
+ * Return: QDF Status
+ */
+QDF_STATUS ucfg_mlme_get_roam_disable_config(struct wlan_objmgr_psoc *psoc,
+					     uint32_t *val);
+
+/**
  * ucfg_mlme_set_roaming_offload() - Enable/disable roaming offload
  * @psoc: pointer to psoc object
  * @val:  enable/disable roaming offload
@@ -1014,7 +1024,27 @@ ucfg_mlme_get_roaming_offload(struct wlan_objmgr_psoc *psoc,
 QDF_STATUS
 ucfg_mlme_set_roaming_offload(struct wlan_objmgr_psoc *psoc,
 			      bool val);
+
+/**
+ * ucfg_mlme_get_roaming_triggers() - Get roaming triggers bitmap
+ * value
+ * @psoc: pointer to psoc object
+ *
+ * Return: Roaming triggers value
+ */
+static inline uint32_t
+ucfg_mlme_get_roaming_triggers(struct wlan_objmgr_psoc *psoc)
+{
+	return wlan_mlme_get_roaming_triggers(psoc);
+}
 #else
+static inline
+QDF_STATUS ucfg_mlme_get_roam_disable_config(struct wlan_objmgr_psoc *psoc,
+					     uint32_t *val)
+{
+	return QDF_STATUS_E_FAILURE;
+}
+
 static inline QDF_STATUS
 ucfg_mlme_get_roaming_offload(struct wlan_objmgr_psoc *psoc,
 			      bool *val)
@@ -1030,6 +1060,12 @@ ucfg_mlme_set_roaming_offload(struct wlan_objmgr_psoc *psoc,
 {
 	return QDF_STATUS_SUCCESS;
 }
+
+static inline uint32_t
+ucfg_mlme_get_roaming_triggers(struct wlan_objmgr_psoc *psoc)
+{
+	return 0;
+}
 #endif
 
 /**
@@ -1042,18 +1078,6 @@ ucfg_mlme_set_roaming_offload(struct wlan_objmgr_psoc *psoc,
 QDF_STATUS
 ucfg_mlme_get_first_scan_bucket_threshold(struct wlan_objmgr_psoc *psoc,
 					  uint8_t *val);
-
-/**
- * ucfg_mlme_set_fw_supported_roaming_akm() - update the supported roaming
- * akm suites advertised by the firmware via wmi service capability
- * @psoc: pointer to psoc object
- * @val:  bitmap value based on firmware capabilities
- *
- * Return: QDF Status
- */
-QDF_STATUS
-ucfg_mlme_set_fw_supported_roaming_akm(struct wlan_objmgr_psoc *psoc,
-				       uint32_t val);
 
 /**
  * ucfg_mlme_is_mawc_enabled() - MAWC enabled or not
@@ -1185,6 +1209,26 @@ ucfg_mlme_get_delay_before_vdev_stop(struct wlan_objmgr_psoc *psoc,
 QDF_STATUS
 ucfg_mlme_get_roam_bmiss_final_bcnt(struct wlan_objmgr_psoc *psoc,
 				    uint8_t *val);
+
+#if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
+/**
+ * ucfg_mlme_update_sae_single_pmk_info() - Update sae_single_pmk_info
+ * @vdev: pointer to VDEV common object
+ * @pmk_info:  Pointer mlme pmkid info
+ *
+ * Return: None
+ */
+void
+ucfg_mlme_update_sae_single_pmk_info(struct wlan_objmgr_vdev *vdev,
+				     struct mlme_pmk_info *pmk_info);
+#else
+static inline void
+ucfg_mlme_update_sae_single_pmk_info(struct wlan_objmgr_vdev *vdev,
+				     struct mlme_pmk_info *pmk_info)
+{
+}
+#endif
+
 /**
  * ucfg_mlme_get_roam_bmiss_first_bcnt() - Get roam bmiss final count
  * @psoc: pointer to psoc object
@@ -2589,19 +2633,6 @@ ucfg_mlme_set_11d_enabled(struct wlan_objmgr_psoc *psoc, bool value)
 }
 
 /**
- * ucfg_mlme_is_change_channel_bandwidth_enabled() - ucfg api to get the
- * enable_change_channel_bandwidth flag
- * @psoc: psoc context
- *
- * Return: true if enabled
- */
-static inline bool
-ucfg_mlme_is_change_channel_bandwidth_enabled(struct wlan_objmgr_psoc *psoc)
-{
-	return wlan_mlme_is_change_channel_bandwidth_enabled(psoc);
-}
-
-/**
  * ucfg_mlme_get_opr_rate_set() - Get operational rate set
  * @psoc: pointer to psoc object
  * @buf: buffer to get rates set
@@ -3159,6 +3190,20 @@ ucfg_mlme_update_tgt_he_cap(struct wlan_objmgr_psoc *psoc,
 			    struct wma_tgt_cfg *cfg)
 {
 	return mlme_update_tgt_he_caps_in_cfg(psoc, cfg);
+}
+
+/**
+ * ucfg_mlme_cfg_get_he_caps() - Get the HE capability info
+ * @psoc: pointer to psoc object
+ * @he_cap: Caps that needs to be filled.
+ *
+ * Return: QDF Status
+ */
+static inline
+QDF_STATUS ucfg_mlme_cfg_get_he_caps(struct wlan_objmgr_psoc *psoc,
+				     tDot11fIEhe_cap *he_cap)
+{
+	return mlme_cfg_get_he_caps(psoc, he_cap);
 }
 
 /**
@@ -3867,4 +3912,57 @@ ucfg_mlme_get_peer_phymode(struct wlan_objmgr_psoc *psoc, uint8_t *mac,
 {
 	return mlme_get_peer_phymode(psoc, mac, peer_phymode);
 }
+
+/**
+ * ucfg_mlme_validate_full_roam_scan_period() - Validate full roam scan period
+ * @full_roam_scan_period: Idle period in seconds between two successive
+ * full channel roam scans
+ *
+ * Return: True if full_roam_scan_period is in expected range, false otherwise.
+ */
+bool ucfg_mlme_validate_full_roam_scan_period(uint32_t full_roam_scan_period);
+
+/**
+ * ucfg_mlme_validate_scan_period() - Validate if scan period is in valid range
+ * @value: Scan period in msec
+ *
+ * Return: True if roam_scan_period is in expected range, false otherwise.
+ */
+bool ucfg_mlme_validate_scan_period(uint32_t roam_scan_period);
+/**
+ * ucfg_mlme_get_ignore_fw_reg_offload_ind() - Get the
+ * ignore_fw_reg_offload_ind ini
+ * @psoc: pointer to psoc object
+ * @disabled: output pointer to hold user config
+ *
+ * Return: QDF Status
+ */
+static inline QDF_STATUS
+ucfg_mlme_get_ignore_fw_reg_offload_ind(struct wlan_objmgr_psoc *psoc,
+					bool *disabled)
+{
+	return wlan_mlme_get_ignore_fw_reg_offload_ind(psoc, disabled);
+}
+
+/**
+ * ucfg_mlme_get_discon_reason_n_from_ap() - Get disconnect reason and from ap
+ * @psoc: PSOC pointer
+ * @vdev_id: vdev id
+ * @from_ap: Get the from_ap cached through mlme_set_discon_reason_n_from_ap
+ *           and copy to this buffer.
+ * @reason_code: Get the reason_code cached through
+ *               mlme_set_discon_reason_n_from_ap and copy to this buffer.
+ *
+ * Fetch the contents of from_ap and reason_codes.
+ *
+ * Return: void
+ */
+static inline void
+ucfg_mlme_get_discon_reason_n_from_ap(struct wlan_objmgr_psoc *psoc,
+				      uint8_t vdev_id, bool *from_ap,
+				      uint32_t *reason_code)
+{
+	mlme_get_discon_reason_n_from_ap(psoc, vdev_id, from_ap, reason_code);
+}
+
 #endif /* _WLAN_MLME_UCFG_API_H_ */

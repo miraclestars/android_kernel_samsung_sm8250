@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -3065,7 +3065,7 @@ static int hdd_check_wext_control(enum hdd_wext_control wext_control,
 		hdd_err_rl("Rejecting disabled ioctl %x", info->cmd);
 		return -ENOTSUPP;
 	case hdd_wext_deprecated:
-		hdd_warn_rl("Using deprecated ioctl %x", info->cmd);
+		hdd_nofl_debug("Using deprecated ioctl %x", info->cmd);
 		return 0;
 	case hdd_wext_enabled:
 		return 0;
@@ -3115,7 +3115,7 @@ void hdd_wlan_get_stats(struct hdd_adapter *adapter, uint16_t *length,
 			"\n[classified] BK %u, BE %u, VI %u, VO %u"
 			"\n\nReceive[%lu] - "
 			"packets %u, dropped %u, unsolict_arp_n_mcast_drp %u, delivered %u, refused %u\n"
-			"GRO - agg %u non-agg %u disabled(conc %u low-tput %u)\n",
+			"GRO - agg %u non-agg %u flush_skip %u low_tput_flush %u disabled(conc %u low-tput %u)\n",
 			qdf_system_ticks(),
 			stats->tx_called,
 			stats->tx_dropped,
@@ -3134,6 +3134,8 @@ void hdd_wlan_get_stats(struct hdd_adapter *adapter, uint16_t *length,
 			total_rx_delv,
 			total_rx_refused,
 			stats->rx_aggregated, stats->rx_non_aggregated,
+			stats->rx_gro_flush_skip,
+			stats->rx_gro_low_tput_flush,
 			qdf_atomic_read(&hdd_ctx->disable_rx_ol_in_concurrency),
 			qdf_atomic_read(&hdd_ctx->disable_rx_ol_in_low_tput));
 
@@ -3561,6 +3563,8 @@ int hdd_set_ldpc(struct hdd_adapter *adapter, int value)
 	ret = sme_update_he_ldpc_supp(mac_handle, adapter->vdev_id, value);
 	if (ret)
 		hdd_err("Failed to set HE LDPC value");
+	ret = sme_set_auto_rate_ldpc(mac_handle, adapter->vdev_id,
+				     (value ? 0 : 1));
 
 	return ret;
 }
@@ -4399,9 +4403,9 @@ static int hdd_we_set_power(struct hdd_adapter *adapter, int value)
 		return 0;
 	case 2:
 		/* Disable PowerSave */
-		sme_save_usr_ps_cfg(mac_handle, false);
 		sme_ps_enable_disable(mac_handle, adapter->vdev_id,
 				      SME_PS_DISABLE);
+		sme_save_usr_ps_cfg(mac_handle, false);
 		return 0;
 	case 3:
 		/* Enable UASPD */
@@ -4683,7 +4687,7 @@ static int hdd_we_set_nss(struct hdd_adapter *adapter, int nss)
 	return qdf_status_to_os_return(status);
 }
 
-static int hdd_we_set_short_gi(struct hdd_adapter *adapter, int sgi)
+int hdd_we_set_short_gi(struct hdd_adapter *adapter, int sgi)
 {
 	mac_handle_t mac_handle = adapter->hdd_ctx->mac_handle;
 	int errno;
@@ -4866,6 +4870,13 @@ static int hdd_we_set_amsdu(struct hdd_adapter *adapter, int amsdu)
 		return -EINVAL;
 	}
 
+	status = ucfg_mlme_set_max_amsdu_num(hdd_ctx->psoc,
+					     amsdu);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		hdd_err("Failed to set Max AMSDU Num to cfg");
+		return -EINVAL;
+	}
+
 	if (amsdu > 1)
 		sme_set_amsdu(mac_handle, true);
 	else
@@ -4878,11 +4889,6 @@ static int hdd_we_set_amsdu(struct hdd_adapter *adapter, int amsdu)
 		hdd_err("Failed to set firmware, errno %d", errno);
 		return errno;
 	}
-
-	status = ucfg_mlme_set_max_amsdu_num(hdd_ctx->psoc,
-					     amsdu);
-	if (QDF_IS_STATUS_ERROR(status))
-		hdd_err("Failed to set Max AMSDU Num to cfg");
 
 	return 0;
 }
@@ -6044,12 +6050,12 @@ static int __iw_setchar_getnone(struct net_device *dev,
 	case WE_WOWL_ADD_PTRN:
 		hdd_debug("ADD_PTRN");
 		if (!hdd_add_wowl_ptrn(adapter, str_arg))
-			return -EINVAL;
+			ret = -EINVAL;
 		break;
 	case WE_WOWL_DEL_PTRN:
 		hdd_debug("DEL_PTRN");
 		if (!hdd_del_wowl_ptrn(adapter, str_arg))
-			return -EINVAL;
+			ret = -EINVAL;
 		break;
 	case WE_NEIGHBOR_REPORT_REQUEST:
 	{
@@ -6226,8 +6232,10 @@ static int __iw_setnone_getint(struct net_device *dev,
 		if (!QDF_IS_STATUS_SUCCESS(status))
 			hdd_err("unable to get vht_enable2x2");
 		*value = (bval == 0) ? 1 : 2;
-		if (policy_mgr_is_current_hwmode_dbs(hdd_ctx->psoc))
+		if (!policy_mgr_is_hw_dbs_2x2_capable(hdd_ctx->psoc) &&
+		    policy_mgr_is_current_hwmode_dbs(hdd_ctx->psoc))
 			*value = *value - 1;
+
 		hdd_debug("GET_NSS: Current NSS:%d", *value);
 		break;
 	}
@@ -7420,6 +7428,7 @@ static int __iw_get_char_setnone(struct net_device *dev,
 	{
 		int8_t s7snr = 0;
 		int status = 0;
+		bool enable_snr_monitoring;
 		struct hdd_context *hdd_ctx;
 		struct hdd_station_ctx *sta_ctx;
 
@@ -7429,12 +7438,14 @@ static int __iw_get_char_setnone(struct net_device *dev,
 			return status;
 
 		sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
-		if (!hdd_ctx->config->enable_snr_monitoring ||
+		enable_snr_monitoring =
+				ucfg_scan_is_snr_monitor_enabled(hdd_ctx->psoc);
+		if (!enable_snr_monitoring ||
 		    eConnectionState_Associated !=
 		    sta_ctx->conn_info.conn_state) {
 			hdd_err("getSNR failed: Enable SNR Monitoring-%d, ConnectionState-%d",
-			       hdd_ctx->config->enable_snr_monitoring,
-			       sta_ctx->conn_info.conn_state);
+				enable_snr_monitoring,
+				sta_ctx->conn_info.conn_state);
 			return -ENONET;
 		}
 		wlan_hdd_get_snr(adapter, &s7snr);
@@ -7611,6 +7622,7 @@ hdd_policy_mgr_set_hw_mode_ut(struct hdd_context *hdd_ctx,
 	enum hw_mode_bandwidth mac1_bw;
 	enum hw_mode_mac_band_cap mac0_band_cap;
 	enum hw_mode_dbs_capab dbs;
+	enum policy_mgr_conc_next_action action;
 
 	switch (cmd) {
 	case 0:
@@ -7621,6 +7633,7 @@ hdd_policy_mgr_set_hw_mode_ut(struct hdd_context *hdd_ctx,
 		mac1_bw = HW_MODE_BW_NONE;
 		mac0_band_cap = HW_MODE_MAC_BAND_NONE;
 		dbs = HW_MODE_DBS_NONE;
+		action = PM_SINGLE_MAC;
 		break;
 	case 1:
 		hdd_debug("set hw mode for dual mac");
@@ -7630,6 +7643,7 @@ hdd_policy_mgr_set_hw_mode_ut(struct hdd_context *hdd_ctx,
 		mac1_bw = HW_MODE_40_MHZ;
 		mac0_band_cap = HW_MODE_MAC_BAND_NONE;
 		dbs = HW_MODE_DBS;
+		action = PM_DBS;
 		break;
 	case 2:
 		hdd_debug("set hw mode for 2x2 5g + 1x1 2g");
@@ -7639,6 +7653,7 @@ hdd_policy_mgr_set_hw_mode_ut(struct hdd_context *hdd_ctx,
 		mac1_bw = HW_MODE_40_MHZ;
 		mac0_band_cap = HW_MODE_MAC_BAND_5G;
 		dbs = HW_MODE_DBS;
+		action = PM_DBS1;
 		break;
 	case 3:
 		hdd_debug("set hw mode for 2x2 2g + 1x1 5g");
@@ -7648,6 +7663,7 @@ hdd_policy_mgr_set_hw_mode_ut(struct hdd_context *hdd_ctx,
 		mac1_bw = HW_MODE_40_MHZ;
 		mac0_band_cap = HW_MODE_MAC_BAND_2G;
 		dbs = HW_MODE_DBS;
+		action = PM_DBS2;
 		break;
 	default:
 		hdd_err("unknown cmd %d", cmd);
@@ -7657,7 +7673,8 @@ hdd_policy_mgr_set_hw_mode_ut(struct hdd_context *hdd_ctx,
 				    mac0_ss, mac0_bw, mac1_ss, mac1_bw,
 				    mac0_band_cap, dbs, HW_MODE_AGILE_DFS_NONE,
 				    HW_MODE_SBS_NONE,
-				    POLICY_MGR_UPDATE_REASON_UT, PM_NOP);
+				    POLICY_MGR_UPDATE_REASON_UT, PM_NOP,
+				    action);
 }
 
 static int iw_get_policy_manager_ut_ops(struct hdd_context *hdd_ctx,
@@ -7728,8 +7745,8 @@ static int iw_get_policy_manager_ut_ops(struct hdd_context *hdd_ctx,
 
 	case WE_POLICY_MANAGER_PCL_CMD:
 	{
-		uint8_t pcl[QDF_MAX_NUM_CHAN] = {0};
-		uint8_t weight_list[QDF_MAX_NUM_CHAN] = {0};
+		uint8_t pcl[NUM_CHANNELS] = {0};
+		uint8_t weight_list[NUM_CHANNELS] = {0};
 		uint32_t pcl_len = 0, i = 0;
 
 		hdd_debug("<iwpriv wlan0 pm_pcl> is called");
@@ -8012,14 +8029,20 @@ static int __iw_set_var_ints_getnone(struct net_device *dev,
 
 		if ((apps_args[0] < WLAN_MODULE_ID_MIN) ||
 		    (apps_args[0] >= WLAN_MODULE_ID_MAX)) {
-			hdd_err("Invalid MODULE ID %d", apps_args[0]);
+			hdd_err_rl("Invalid MODULE ID %d", apps_args[0]);
 			return -EINVAL;
 		}
 		if ((apps_args[1] > (WMA_MAX_NUM_ARGS)) ||
 		    (apps_args[1] < 0)) {
-			hdd_err("Too Many/Few args %d", apps_args[1]);
+			hdd_err_rl("Too Many/Few args %d", apps_args[1]);
 			return -EINVAL;
 		}
+
+		if (adapter->vdev_id >= WLAN_MAX_VDEVS) {
+			hdd_err_rl("Invalid vdev id");
+			return -EINVAL;
+		}
+
 		status = sme_send_unit_test_cmd(adapter->vdev_id,
 						apps_args[0],
 						apps_args[1],
@@ -9474,7 +9497,7 @@ static int __iw_set_pno(struct net_device *dev,
 
 	vdev = wlan_objmgr_get_vdev_by_macaddr_from_pdev(hdd_ctx->pdev,
 							 dev->dev_addr,
-							 WLAN_LEGACY_MAC_ID);
+							 WLAN_OSIF_ID);
 	if (!vdev) {
 		hdd_err("vdev object is NULL");
 		return -EIO;
@@ -9485,7 +9508,8 @@ static int __iw_set_pno(struct net_device *dev,
 	data = qdf_mem_malloc(len);
 	if (!data) {
 		hdd_err("fail to allocate memory %zu", len);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto exit;
 	}
 	qdf_mem_copy(data, extra, (len-1));
 	ptr = data;
@@ -9684,7 +9708,7 @@ static int __iw_set_pno(struct net_device *dev,
 	}
 
 exit:
-	wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_MAC_ID);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 
 	qdf_mem_free(data);
 	return ret;

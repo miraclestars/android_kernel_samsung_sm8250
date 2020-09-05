@@ -43,11 +43,14 @@ struct ndi_find_vdev_filter {
  * @psoc: pointer to psoc object
  * @data: request data. contains vendor cmd tlvs
  * @data_len: length of data
+ * @is_ndp_allowed: Indicates whether to allow NDP creation.
+ *		    NDI creation is always allowed.
  *
  * Return: status of operation
  */
 int os_if_nan_process_ndp_cmd(struct wlan_objmgr_psoc *psoc,
-				const void *data, int data_len);
+			      const void *data, int data_len,
+			      bool is_ndp_allowed);
 
 /**
  * os_if_nan_register_hdd_callbacks: os_if api to register hdd callbacks
@@ -75,11 +78,13 @@ int os_if_nan_register_lim_callbacks(struct wlan_objmgr_psoc *psoc,
  * @psoc: pointer to psoc object
  * @vdev_id: vdev id of ndi
  * @success: if create was success or failure
+ * @sta_id: sta_id of the NDI
  *
  * Return: None
  */
 void os_if_nan_post_ndi_create_rsp(struct wlan_objmgr_psoc *psoc,
-				   uint8_t vdev_id, bool success);
+				   uint8_t vdev_id, bool success,
+				   uint8_t sta_id);
 
 /**
  * os_if_nan_post_ndi_delete_rsp: os_if api to pos ndi delete rsp to umac nan
@@ -169,7 +174,8 @@ int os_if_process_nan_req(struct wlan_objmgr_psoc *psoc,
 #else
 
 static inline void os_if_nan_post_ndi_create_rsp(struct wlan_objmgr_psoc *psoc,
-						 uint8_t vdev_id, bool success)
+						 uint8_t vdev_id, bool success,
+						 uint8_t sta_id)
 {
 }
 

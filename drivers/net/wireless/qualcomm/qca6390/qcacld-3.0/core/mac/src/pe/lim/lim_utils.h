@@ -102,6 +102,7 @@ typedef enum {
 #define OBSS_DETECTION_IS_HT_20MHZ(_m) ((_m) & OBSS_DETECTION_HT_20MHZ_BIT_MASK)
 
 #define MAX_WAIT_FOR_BCN_TX_COMPLETE 4000
+#define MAX_WAKELOCK_FOR_CSA         5000
 
 #ifdef WLAN_FEATURE_11W
 typedef union uPmfSaQueryTimerId {
@@ -1035,11 +1036,13 @@ void lim_log_he_cap(struct mac_context *mac, tDot11fIEhe_cap *he_cap);
  * @sta_ds: pointer to sta dph hash table entry
  * @assoc_rsp: pointer to assoc response
  * @session_entry: pointer to PE session
+ * @beacon: pointer to beacon
  *
  * Return: None
  */
 void lim_update_stads_he_caps(tpDphHashNode sta_ds, tpSirAssocRsp assoc_rsp,
-			      struct pe_session *session_entry);
+			      struct pe_session *session_entry,
+			      tSchBeaconStruct *beacon);
 
 /**
  * lim_update_usr_he_cap() - Update HE capability based on userspace
@@ -1210,8 +1213,10 @@ static inline void lim_intersect_sta_he_caps(tpSirAssocReq assoc_req,
 {
 }
 
-static inline void lim_update_stads_he_caps(tpDphHashNode sta_ds, tpSirAssocRsp assoc_rsp,
-		struct pe_session *session_entry)
+static inline void lim_update_stads_he_caps(tpDphHashNode sta_ds,
+					    tpSirAssocRsp assoc_rsp,
+					    struct pe_session *session_entry,
+					    tSchBeaconStruct *beacon)
 {
 	return;
 }
@@ -1513,6 +1518,18 @@ void lim_rx_invalid_peer_process(struct mac_context *mac_ctx,
 				 struct scheduler_msg *lim_msg);
 
 /**
+ * lim_req_send_delba_ind_process() - process send delba indication
+ * @mac_ctx: mac context
+ * @lim_msg: lim message
+ *
+ * This function will process the send delba indication from DP.
+ *
+ * Return: None
+ */
+void lim_req_send_delba_ind_process(struct mac_context *mac_ctx,
+				    struct scheduler_msg *lim_msg);
+
+/**
  * lim_send_beacon() - send beacon indication to firmware
  * @mac_ctx: Pointer to Global MAC structure
  * @session: session pointer
@@ -1528,6 +1545,14 @@ void lim_send_beacon(struct mac_context *mac_ctx, struct pe_session *session);
  * Return: None
  */
 void lim_ndi_mlme_vdev_up_transition(struct pe_session *session);
+
+/**
+ * lim_sap_move_to_cac_wait_state() - move to cac wait state
+ * @sap_ctx: SAP context
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS lim_sap_move_to_cac_wait_state(struct pe_session *session);
 
 /**
  * lim_disconnect_complete - Deliver vdev disconnect complete event or
@@ -1554,6 +1579,20 @@ void lim_disconnect_complete(struct pe_session *session, bool del_bss);
  */
 QDF_STATUS lim_sta_mlme_vdev_stop_send(struct vdev_mlme_obj *vdev_mlme,
 				       uint16_t data_len, void *data);
+
+/**
+ * lim_sta_mlme_vdev_req_fail() - send VDEV start req failure
+ * @vdev_mlme_obj:  VDEV MLME comp object
+ * @data_len: data size
+ * @data: event data
+ *
+ * API invokes vdev stop
+ *
+ * Return: SUCCESS on successful completion of req failure operation
+ *         FAILURE, if it fails due to any
+ */
+QDF_STATUS lim_sta_mlme_vdev_req_fail(struct vdev_mlme_obj *vdev_mlme,
+				      uint16_t data_len, void *data);
 
 /**
  * lim_sta_mlme_vdev_start_send() - send VDEV start

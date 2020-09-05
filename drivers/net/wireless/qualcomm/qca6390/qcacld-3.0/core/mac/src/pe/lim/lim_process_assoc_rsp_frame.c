@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -132,7 +132,7 @@ static void lim_update_stads_htcap(struct mac_context *mac_ctx,
  */
 void lim_update_assoc_sta_datas(struct mac_context *mac_ctx,
 	tpDphHashNode sta_ds, tpSirAssocRsp assoc_rsp,
-	struct pe_session *session_entry)
+	struct pe_session *session_entry, tSchBeaconStruct *beacon)
 {
 	uint32_t phy_mode;
 	bool qos_mode;
@@ -159,30 +159,37 @@ void lim_update_assoc_sta_datas(struct mac_context *mac_ctx,
 	else if (assoc_rsp->vendor_vht_ie.VHTCaps.present)
 		vht_caps = &assoc_rsp->vendor_vht_ie.VHTCaps;
 
-	if (IS_DOT11_MODE_VHT(session_entry->dot11mode)) {
-		if ((vht_caps) && vht_caps->present) {
-			sta_ds->mlmStaContext.vhtCapability =
-				vht_caps->present;
-			/*
-			 * If 11ac is supported and if the peer is
-			 * sending VHT capabilities,
-			 * then htMaxRxAMpduFactor should be
-			 * overloaded with VHT maxAMPDULenExp
-			 */
-			sta_ds->htMaxRxAMpduFactor = vht_caps->maxAMPDULenExp;
-			if (session_entry->htSupportedChannelWidthSet) {
-				if (assoc_rsp->VHTOperation.present)
-					sta_ds->vhtSupportedChannelWidthSet =
+	if (session_entry->vhtCapability && (vht_caps && vht_caps->present)) {
+		sta_ds->mlmStaContext.vhtCapability =
+			vht_caps->present;
+		/*
+		 * If 11ac is supported and if the peer is
+		 * sending VHT capabilities,
+		 * then htMaxRxAMpduFactor should be
+		 * overloaded with VHT maxAMPDULenExp
+		 */
+		sta_ds->htMaxRxAMpduFactor = vht_caps->maxAMPDULenExp;
+		if (session_entry->htSupportedChannelWidthSet) {
+			if (assoc_rsp->VHTOperation.present)
+				sta_ds->vhtSupportedChannelWidthSet =
 					assoc_rsp->VHTOperation.chanWidth;
-				else
-					sta_ds->vhtSupportedChannelWidthSet =
-						eHT_CHANNEL_WIDTH_40MHZ;
-			}
+			else
+				sta_ds->vhtSupportedChannelWidthSet =
+					eHT_CHANNEL_WIDTH_40MHZ;
 		}
+		sta_ds->vht_mcs_10_11_supp = 0;
+		if (mac_ctx->mlme_cfg->vht_caps.vht_cap_info.
+		    vht_mcs_10_11_supp &&
+		    assoc_rsp->qcn_ie.present &&
+		    assoc_rsp->qcn_ie.vht_mcs11_attr.present)
+			sta_ds->vht_mcs_10_11_supp =
+				assoc_rsp->qcn_ie.vht_mcs11_attr.
+				vht_mcs_10_11_supp;
 	}
 
 	if (IS_DOT11_MODE_HE(session_entry->dot11mode))
-		lim_update_stads_he_caps(sta_ds, assoc_rsp, session_entry);
+		lim_update_stads_he_caps(sta_ds, assoc_rsp,
+					 session_entry, beacon);
 
 	if (lim_is_sta_he_capable(sta_ds))
 		he_cap = &assoc_rsp->he_cap;
@@ -306,7 +313,6 @@ static void lim_update_ric_data(struct mac_context *mac_ctx,
 			pe_err("RIC data not present");
 		}
 	} else {
-		pe_debug("Ric is not present");
 		session_entry->RICDataLen = 0;
 		session_entry->ricData = NULL;
 	}
@@ -352,7 +358,6 @@ static void lim_update_ese_tspec(struct mac_context *mac_ctx,
 	} else {
 		session_entry->tspecLen = 0;
 		session_entry->tspecIes = NULL;
-		pe_debug("Tspec EID *NOT* present in assoc rsp");
 	}
 	return;
 }
@@ -381,7 +386,7 @@ static void lim_update_ese_tsm(struct mac_context *mac_ctx,
 	 * Ie is present in the reassoc rsp
 	 */
 	if (!assoc_rsp->tspecPresent) {
-		pe_err("TSM present but TSPEC IE not present");
+		pe_debug("TSM present but TSPEC IE not present");
 		return;
 	}
 	tsm_ctx = &session_entry->eseContext.tsm;
@@ -572,33 +577,14 @@ lim_process_assoc_rsp_frame(struct mac_context *mac_ctx,
 	struct csr_roam_session *roam_session;
 #endif
 	uint8_t ap_nss;
+	int8_t rssi;
 
-	/* Initialize status code to success. */
-	if (lim_is_roam_synch_in_progress(session_entry))
-		hdr = (tpSirMacMgmtHdr) mac_ctx->roam.pReassocResp;
-	else
-		hdr = WMA_GET_RX_MAC_HEADER(rx_pkt_info);
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 	sme_sessionid = session_entry->smeSessionId;
 #endif
 	assoc_cnf.resultCode = eSIR_SME_SUCCESS;
 	/* Update PE session Id */
 	assoc_cnf.sessionId = session_entry->peSessionId;
-	if (!hdr) {
-		pe_err("LFR3: Reassoc response packet header is NULL");
-		return;
-	}
-
-	pe_debug("received Re/Assoc: %d resp on sessionid: %d systemrole: %d"
-		" and mlmstate: %d RSSI: %d from "QDF_MAC_ADDR_STR, subtype,
-		session_entry->peSessionId, GET_LIM_SYSTEM_ROLE(session_entry),
-		session_entry->limMlmState,
-		(uint) abs((int8_t) WMA_GET_RX_RSSI_NORMALIZED(rx_pkt_info)),
-		QDF_MAC_ADDR_ARRAY(hdr->sa));
-
-	beacon = qdf_mem_malloc(sizeof(tSchBeaconStruct));
-	if (!beacon)
-		return;
 
 	if (LIM_IS_AP_ROLE(session_entry)) {
 		/*
@@ -607,16 +593,36 @@ lim_process_assoc_rsp_frame(struct mac_context *mac_ctx,
 		 */
 		pe_err("Should not received Re/Assoc Response in role: %d",
 			GET_LIM_SYSTEM_ROLE(session_entry));
-		qdf_mem_free(beacon);
 		return;
 	}
+
 	if (lim_is_roam_synch_in_progress(session_entry)) {
 		hdr = (tpSirMacMgmtHdr) mac_ctx->roam.pReassocResp;
 		frame_len = mac_ctx->roam.reassocRespLen - SIR_MAC_HDR_LEN_3A;
+		rssi = 0;
 	} else {
 		hdr = WMA_GET_RX_MAC_HEADER(rx_pkt_info);
 		frame_len = WMA_GET_RX_PAYLOAD_LEN(rx_pkt_info);
+		rssi = (uint)abs((int8_t)WMA_GET_RX_RSSI_NORMALIZED(rx_pkt_info));
 	}
+
+	if (!hdr) {
+		pe_err("LFR3: Reassoc response packet header is NULL");
+		return;
+	}
+
+	pe_nofl_info("Assoc rsp RX: subtype %d vdev %d sys role %d lim state %d rssi %d from " QDF_MAC_ADDR_STR,
+		     subtype, session_entry->vdev_id,
+		     GET_LIM_SYSTEM_ROLE(session_entry),
+		     session_entry->limMlmState, rssi,
+		     QDF_MAC_ADDR_ARRAY(hdr->sa));
+	QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE, QDF_TRACE_LEVEL_DEBUG,
+			   (uint8_t *)hdr, frame_len + SIR_MAC_HDR_LEN_3A);
+
+	beacon = qdf_mem_malloc(sizeof(tSchBeaconStruct));
+	if (!beacon)
+		return;
+
 	if (((subtype == LIM_ASSOC) &&
 		(session_entry->limMlmState != eLIM_MLM_WT_ASSOC_RSP_STATE)) ||
 		((subtype == LIM_REASSOC) &&
@@ -913,19 +919,19 @@ lim_process_assoc_rsp_frame(struct mac_context *mac_ctx,
 			goto assocReject;
 		}
 
-		if (ap_nss < session_entry->nss) {
+		if (ap_nss < session_entry->nss)
 			session_entry->nss = ap_nss;
-			lim_objmgr_update_vdev_nss(mac_ctx->psoc,
-						   session_entry->smeSessionId,
-						   ap_nss);
-		}
+
+		lim_objmgr_update_vdev_nss(mac_ctx->psoc,
+					   session_entry->smeSessionId,
+					   session_entry->nss);
 
 		if ((session_entry->limMlmState ==
 		    eLIM_MLM_WT_FT_REASSOC_RSP_STATE) ||
 			lim_is_roam_synch_in_progress(session_entry)) {
 			pe_debug("Sending self sta");
 			lim_update_assoc_sta_datas(mac_ctx, sta_ds, assoc_rsp,
-				session_entry);
+				session_entry, NULL);
 			lim_update_stads_ext_cap(mac_ctx, session_entry,
 						 assoc_rsp, sta_ds);
 			/* Store assigned AID for TIM processing */
@@ -1006,23 +1012,24 @@ lim_process_assoc_rsp_frame(struct mac_context *mac_ctx,
 	if (lim_search_pre_auth_list(mac_ctx, hdr->sa))
 		lim_delete_pre_auth_node(mac_ctx, hdr->sa);
 
-	if (ap_nss < session_entry->nss) {
+	if (ap_nss < session_entry->nss)
 		session_entry->nss = ap_nss;
-		lim_objmgr_update_vdev_nss(mac_ctx->psoc,
-					   session_entry->smeSessionId,
-					   ap_nss);
-	}
 
-	lim_update_assoc_sta_datas(mac_ctx, sta_ds, assoc_rsp, session_entry);
+	lim_objmgr_update_vdev_nss(mac_ctx->psoc,
+				   session_entry->smeSessionId,
+				   session_entry->nss);
+
 	/*
 	 * Extract the AP capabilities from the beacon that
 	 * was received earlier
-	*/
+	 */
 	ie_len = lim_get_ielen_from_bss_description(
 		&session_entry->lim_join_req->bssDescription);
 	lim_extract_ap_capabilities(mac_ctx,
 		(uint8_t *)session_entry->lim_join_req->bssDescription.ieFields,
 		ie_len, beacon);
+	lim_update_assoc_sta_datas(mac_ctx, sta_ds, assoc_rsp,
+				   session_entry, beacon);
 
 	if (lim_is_session_he_capable(session_entry)) {
 		session_entry->mu_edca_present = assoc_rsp->mu_edca_present;

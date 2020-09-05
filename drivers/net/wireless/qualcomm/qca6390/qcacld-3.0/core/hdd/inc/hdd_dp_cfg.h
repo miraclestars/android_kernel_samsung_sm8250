@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -37,10 +37,14 @@
 #define CFG_RX_MODE_DEFAULT 0
 #elif defined(HELIUMPLUS)
 #define CFG_RX_MODE_DEFAULT CFG_ENABLE_NAPI
-#elif defined(QCA_WIFI_QCA6290_11AX)
+#endif
+
+#ifndef CFG_RX_MODE_DEFAULT
+#if defined(FEATURE_WLAN_DP_RX_THREADS)
 #define CFG_RX_MODE_DEFAULT (CFG_ENABLE_DP_RX_THREADS | CFG_ENABLE_NAPI)
 #else
 #define CFG_RX_MODE_DEFAULT (CFG_ENABLE_RX_THREAD | CFG_ENABLE_NAPI)
+#endif
 #endif
 
 /* Max # of packets to be processed in 1 tx comp loop */
@@ -356,7 +360,7 @@
  *
  * @Min: 0
  * @Max: 4294967295UL
- * @Default: 7000
+ * @Default: 9000
  *
  * This ini specifies the bus bandwidth very high threshold
  *
@@ -369,7 +373,7 @@
 		"gBusBandwidthVeryHighThreshold", \
 		0, \
 		4294967295UL, \
-		7000, \
+		9000, \
 		CFG_VALUE_OR_DEFAULT, \
 		"Bus bandwidth very high threshold")
 
@@ -640,6 +644,35 @@
 		500, \
 		CFG_VALUE_OR_DEFAULT, \
 		"High Threshold inorder to trigger High Tx Tp")
+
+/*
+ * <ini>
+ * gBusLowTputCntThreshold - Threshold count to trigger low Tput
+ * 			     GRO flush skip
+ * @Min: 0
+ * @Max: 200
+ * @Default: 10
+ *
+ * This ini is a threshold that if count of times for bus Tput level
+ * PLD_BUS_WIDTH_LOW in bus_bw_timer() >= this threshold, will enable skipping
+ * GRO flush, current default threshold is 10, then will delay GRO flush-skip
+ * 1 second for low Tput level.
+ *
+ * Supported Feature: GRO flush skip when low T-put
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_DP_BUS_LOW_BW_CNT_THRESHOLD \
+		CFG_INI_UINT( \
+		"gBusLowTputCntThreshold", \
+		0, \
+		200, \
+		10, \
+		CFG_VALUE_OR_DEFAULT, \
+		"Threshold to trigger GRO flush skip for low T-put")
+
 #endif /*WLAN_FEATURE_DP_BUS_BANDWIDTH*/
 
 /*
@@ -934,14 +967,40 @@
 	1, 4, 1, CFG_VALUE_OR_DEFAULT, \
 	"Control to set the number of dp rx threads")
 
+/*
+ * <ini>
+ * ce_service_max_rx_ind_flush - Maximum number of HTT messages
+ * to be processed per NAPI poll
+ *
+ * @Min: 1
+ * @Max: 32
+ * @Default: 1
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
 #define CFG_DP_CE_SERVICE_MAX_RX_IND_FLUSH \
 		CFG_INI_UINT("ce_service_max_rx_ind_flush", \
-		1, 32, 32, \
+		1, 32, 1, \
 		CFG_VALUE_OR_DEFAULT, "Ctrl to set ce service max rx ind flsh")
 
+/*
+ * <ini>
+ * ce_service_max_yield_time - Time in microseconds after which
+ * a NAPI poll must yield
+ *
+ * @Min: 500
+ * @Max: 10000
+ * @Default: 500
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
 #define CFG_DP_CE_SERVICE_MAX_YIELD_TIME \
 		CFG_INI_UINT("ce_service_max_yield_time", \
-		500, 10000, 10000, \
+		500, 10000, 500, \
 		CFG_VALUE_OR_DEFAULT, "Ctrl to set ce service max yield time")
 
 #ifdef WLAN_FEATURE_FASTPATH
@@ -994,22 +1053,61 @@
 		20, \
 		"1, 6, 2, 126", \
 		"dp trace configuration string")
+
+/*
+ * <ini>
+ * dp_proto_event_bitmap - Control for which protocol packet diag event should
+ *  be sent to user space.
+ * @Min: 0
+ * @Max: 0x17
+ * @Default: 0x6
+ *
+ * This ini is used to control for which protocol packet diag event should be
+ * sent to user space.
+ *
+ * QDF_NBUF_PKT_TRAC_TYPE_DNS       0x01
+ * QDF_NBUF_PKT_TRAC_TYPE_EAPOL     0x02
+ * QDF_NBUF_PKT_TRAC_TYPE_DHCP      0x04
+ * QDF_NBUF_PKT_TRAC_TYPE_ARP       0x10
+ *
+ * Related: None
+ *
+ * Supported Feature: STA, SAP
+ *
+ * Usage: Internal
+ *
+ * <ini>
+ */
+#define CFG_DP_PROTO_EVENT_BITMAP \
+		CFG_INI_UINT("dp_proto_event_bitmap", \
+		0, 0x17, 0x17, \
+		CFG_VALUE_OR_DEFAULT, \
+		"Control for which protocol type diag log should be sent")
+
 #define CFG_DP_CONFIG_DP_TRACE_ALL \
 		CFG(CFG_DP_ENABLE_DP_TRACE) \
-		CFG(CFG_DP_DP_TRACE_CONFIG)
+		CFG(CFG_DP_DP_TRACE_CONFIG) \
+		CFG(CFG_DP_PROTO_EVENT_BITMAP)
 #else
 #define CFG_DP_CONFIG_DP_TRACE_ALL
 #endif
 
+#ifdef WLAN_NUD_TRACKING
 /*
  * <ini>
  * gEnableNUDTracking - Will enable or disable NUD tracking within driver
  * @Min: 0
- * @Max: 1
- * @Default: 1
+ * @Max: 3
+ * @Default: 2
  *
- * This ini is used to enable or disable NUD tracking within driver
- *
+ * This ini is used to specify the behaviour of the driver for NUD tracking.
+ * If the ini value is:-
+ * 0: Driver will not track the NUD failures, and ignore the same.
+ * 1: Driver will track the NUD failures and if honoured will disconnect from
+ * the connected BSSID.
+ * 2: Driver will track the NUD failures and if honoured will roam away from
+ * the connected BSSID to a new BSSID to retain the data connectivity.
+ * 3: Driver will try to roam to a new AP but if roam fails, disconnect.
  * Related: None
  *
  * Supported Feature: STA
@@ -1018,10 +1116,12 @@
  *
  * <ini>
  */
-#ifdef WLAN_NUD_TRACKING
 #define CFG_DP_ENABLE_NUD_TRACKING \
-		CFG_INI_BOOL("gEnableNUDTracking", \
-		true, "Ctrl to enable nud tracking")
+		CFG_INI_UINT("gEnableNUDTracking", \
+		 0, \
+		 3, \
+		 2, \
+		 CFG_VALUE_OR_DEFAULT, "Driver NUD tracking behaviour")
 
 #define CFG_DP_ENABLE_NUD_TRACKING_ALL \
 			CFG(CFG_DP_ENABLE_NUD_TRACKING)
@@ -1083,7 +1183,8 @@
 	CFG(CFG_DP_TCP_DELACK_THRESHOLD_HIGH) \
 	CFG(CFG_DP_TCP_DELACK_THRESHOLD_LOW) \
 	CFG(CFG_DP_TCP_DELACK_TIMER_COUNT) \
-	CFG(CFG_DP_TCP_TX_HIGH_TPUT_THRESHOLD)
+	CFG(CFG_DP_TCP_TX_HIGH_TPUT_THRESHOLD) \
+	CFG(CFG_DP_BUS_LOW_BW_CNT_THRESHOLD)
 #else
 #define CFG_HDD_DP_BUS_BANDWIDTH
 #endif

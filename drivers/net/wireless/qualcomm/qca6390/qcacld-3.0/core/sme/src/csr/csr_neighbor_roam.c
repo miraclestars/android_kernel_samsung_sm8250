@@ -34,6 +34,7 @@
 #include "csr_neighbor_roam.h"
 #include "mac_trace.h"
 #include "wlan_policy_mgr_api.h"
+#include "wlan_mlme_api.h"
 
 static const char *lfr_get_config_item_string(uint8_t reason)
 {
@@ -58,8 +59,7 @@ void csr_neighbor_roam_state_transition(struct mac_context *mac_ctx,
 	mac_ctx->roam.neighborRoamInfo[session].prevNeighborRoamState =
 		mac_ctx->roam.neighborRoamInfo[session].neighborRoamState;
 	mac_ctx->roam.neighborRoamInfo[session].neighborRoamState = newstate;
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		FL("Sessionid (%d) NeighborRoam transition from %s to %s"),
+	sme_nofl_debug("NeighborRoam transition: vdev %d %s --> %s",
 		session, csr_neighbor_roam_state_to_string(
 		mac_ctx->roam.neighborRoamInfo[session].prevNeighborRoamState),
 		csr_neighbor_roam_state_to_string(newstate));
@@ -134,19 +134,22 @@ QDF_STATUS csr_neighbor_roam_update_fast_roaming_enabled(struct mac_context *mac
 	switch (neighbor_roam_info->neighborRoamState) {
 	case eCSR_NEIGHBOR_ROAM_STATE_CONNECTED:
 		qdf_status = sme_acquire_global_lock(&mac_ctx->sme);
-		if (QDF_IS_STATUS_SUCCESS(qdf_status)) {
-			if (fast_roam_enabled) {
-				csr_roam_offload_scan(mac_ctx, session_id,
-						ROAM_SCAN_OFFLOAD_START,
-						REASON_CONNECT);
-			} else {
-				csr_roam_offload_scan(mac_ctx, session_id,
-					ROAM_SCAN_OFFLOAD_STOP,
-					REASON_SUPPLICANT_DISABLED_ROAMING);
-			}
-			sme_release_global_lock(&mac_ctx->sme);
+		if (QDF_IS_STATUS_ERROR(qdf_status))
+			break;
+
+		mlme_set_supplicant_disabled_roaming(mac_ctx->psoc, session_id,
+						     !fast_roam_enabled);
+		if (fast_roam_enabled) {
+			csr_post_roam_state_change(mac_ctx, session_id,
+						   ROAM_RSO_STARTED,
+						   REASON_CONNECT);
+		} else {
+			csr_post_roam_state_change(mac_ctx, session_id,
+					    ROAM_RSO_STOPPED,
+					    REASON_SUPPLICANT_DISABLED_ROAMING);
 		}
-	break;
+		sme_release_global_lock(&mac_ctx->sme);
+		break;
 	case eCSR_NEIGHBOR_ROAM_STATE_INIT:
 		sme_debug("Currently in INIT state, Nothing to do");
 		break;
@@ -220,8 +223,7 @@ QDF_STATUS csr_neighbor_roam_update_config(struct mac_context *mac_ctx,
 	}
 	if (state == eCSR_NEIGHBOR_ROAM_STATE_CONNECTED) {
 		sme_debug("CONNECTED, send update cfg cmd");
-		csr_roam_offload_scan(mac_ctx, session_id,
-			ROAM_SCAN_OFFLOAD_UPDATE_CFG, reason);
+		csr_roam_update_cfg(mac_ctx, session_id, reason);
 	}
 	sme_debug("LFR config for %s changed from %d to %d",
 			lfr_get_config_item_string(reason), old_value, value);
@@ -323,6 +325,18 @@ static void csr_neighbor_roam_reset_init_state_control_info(struct mac_context *
 	 */
 	csr_neighbor_roam_reset_report_scan_state_control_info(mac, sessionId);
 }
+
+#ifdef WLAN_FEATURE_11W
+void
+csr_update_pmf_cap_from_connected_profile(tCsrRoamConnectedProfile *profile,
+					  struct scan_filter *filter)
+{
+	if (profile->MFPCapable || profile->MFPEnabled)
+		filter->pmf_cap = WLAN_PMF_CAPABLE;
+	if (profile->MFPRequired)
+		filter->pmf_cap = WLAN_PMF_REQUIRED;
+}
+#endif
 
 /**
  * csr_neighbor_roam_prepare_scan_profile_filter()
@@ -709,45 +723,6 @@ static bool csr_neighbor_roam_is_ssid_and_security_match(struct mac_context *mac
 
 }
 
-bool csr_neighbor_roam_is_new_connected_profile(struct mac_context *mac,
-						uint8_t sessionId)
-{
-	tpCsrNeighborRoamControlInfo pNeighborRoamInfo =
-		&mac->roam.neighborRoamInfo[sessionId];
-	tCsrRoamConnectedProfile *pCurrProfile = NULL;
-	tCsrRoamConnectedProfile *pPrevProfile = NULL;
-	tDot11fBeaconIEs *pIes = NULL;
-	struct bss_description *bss_desc = NULL;
-	bool fNew = true;
-
-	if (!(mac->roam.roamSession && CSR_IS_SESSION_VALID(mac, sessionId)))
-		return fNew;
-
-	pCurrProfile = &mac->roam.roamSession[sessionId].connectedProfile;
-	if (!pCurrProfile)
-		return fNew;
-
-	pPrevProfile = &pNeighborRoamInfo->prevConnProfile;
-	if (!pPrevProfile)
-		return fNew;
-
-	bss_desc = pPrevProfile->bss_desc;
-	if (bss_desc) {
-		if (QDF_IS_STATUS_SUCCESS(
-		    csr_get_parsed_bss_description_ies(mac, bss_desc, &pIes))
-		    && csr_neighbor_roam_is_ssid_and_security_match(mac,
-				pCurrProfile, bss_desc, pIes, sessionId)) {
-			fNew = false;
-		}
-		if (pIes)
-			qdf_mem_free(pIes);
-	}
-
-	sme_debug("roam profile match: %d", !fNew);
-
-	return fNew;
-}
-
 bool csr_neighbor_roam_connected_profile_match(struct mac_context *mac,
 					       uint8_t sessionId,
 					       struct tag_csrscan_result
@@ -788,13 +763,33 @@ void csr_roam_reset_roam_params(struct mac_context *mac_ctx)
 	 * clear all the whitelist parameters and remaining
 	 * needs to be retained across connections.
 	 */
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		FL("Roaming parameters are reset"));
 	roam_params = &mac_ctx->roam.configParam.roam_params;
 	roam_params->num_ssid_allowed_list = 0;
 	qdf_mem_zero(&roam_params->ssid_allowed_list,
 			sizeof(tSirMacSSid) * MAX_SSID_ALLOWED_LIST);
 }
+
+#if defined(WLAN_FEATURE_HOST_ROAM) || defined(WLAN_FEATURE_ROAM_OFFLOAD)
+static void csr_roam_restore_default_config(struct mac_context *mac_ctx,
+					    uint8_t vdev_id)
+{
+	struct roam_triggers triggers;
+
+	sme_set_roam_config_enable(MAC_HANDLE(mac_ctx), vdev_id, 0);
+
+	triggers.vdev_id = vdev_id;
+	triggers.trigger_bitmap = wlan_mlme_get_roaming_triggers(mac_ctx->psoc);
+	sme_debug("Reset roam trigger bitmap to 0x%x", triggers.trigger_bitmap);
+	sme_set_roam_triggers(MAC_HANDLE(mac_ctx), &triggers);
+	sme_roam_control_restore_default_config(MAC_HANDLE(mac_ctx),
+						vdev_id);
+}
+#else
+static void csr_roam_restore_default_config(struct mac_context *mac_ctx,
+					    uint8_t vdev_id)
+{
+}
+#endif
 
 /**
  * csr_neighbor_roam_indicate_disconnect() - To indicate disconnect
@@ -833,12 +828,7 @@ QDF_STATUS csr_neighbor_roam_indicate_disconnect(struct mac_context *mac,
 	 */
 	csr_roam_free_connect_profile(pPrevProfile);
 	csr_roam_copy_connect_profile(mac, sessionId, pPrevProfile);
-	/*
-	 * clear the roaming parameters that are per connection.
-	 * For a new connection, they have to be programmed again.
-	 */
-	if (!csr_neighbor_middle_of_roaming(mac, sessionId))
-		csr_roam_reset_roam_params(mac);
+
 	if (pSession) {
 		roam_session = &mac->roam.roamSession[sessionId];
 		if (pSession->pCurRoamProfile && (QDF_STA_MODE !=
@@ -927,11 +917,20 @@ QDF_STATUS csr_neighbor_roam_indicate_disconnect(struct mac_context *mac,
 			pNeighborRoamInfo->uOsRequestedHandoff = 0;
 		break;
 	}
-	/*Inform the Firmware to STOP Scanning as the host has a disconnect. */
-	if (csr_roam_is_sta_mode(mac, sessionId)) {
-		csr_roam_offload_scan(mac, sessionId, ROAM_SCAN_OFFLOAD_STOP,
-				REASON_DISCONNECTED);
+
+	/*
+	 * clear the roaming parameters that are per connection.
+	 * For a new connection, they have to be programmed again.
+	 */
+	if (!csr_neighbor_middle_of_roaming(mac, sessionId)) {
+		csr_roam_reset_roam_params(mac);
+		csr_roam_restore_default_config(mac, sessionId);
 	}
+
+	/*Inform the Firmware to STOP Scanning as the host has a disconnect. */
+	if (csr_roam_is_sta_mode(mac, sessionId))
+		csr_post_roam_state_change(mac, sessionId, ROAM_DEINIT,
+					   REASON_DISCONNECTED);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -946,14 +945,12 @@ QDF_STATUS csr_neighbor_roam_indicate_disconnect(struct mac_context *mac,
  *
  * Return: QDF status
  */
-static void csr_neighbor_roam_info_ctx_init(
-		struct mac_context *mac,
-		uint8_t session_id)
+static void csr_neighbor_roam_info_ctx_init(struct mac_context *mac,
+					    uint8_t session_id)
 {
 	tpCsrNeighborRoamControlInfo ngbr_roam_info =
 		&mac->roam.neighborRoamInfo[session_id];
 	struct csr_roam_session *session = &mac->roam.roamSession[session_id];
-	struct csr_roam_profile *roam_profile = session->pCurRoamProfile;
 	int init_ft_flag = false;
 
 	csr_init_occupied_channels_list(mac, session_id);
@@ -993,8 +990,6 @@ static void csr_neighbor_roam_info_ctx_init(
 		ngbr_roam_info->is11rAssoc = true;
 	} else
 		ngbr_roam_info->is11rAssoc = false;
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-			FL("11rAssoc is = %d"), ngbr_roam_info->is11rAssoc);
 
 #ifdef FEATURE_WLAN_ESE
 	/* Based on the auth scheme tell if we are 11r */
@@ -1004,9 +999,6 @@ static void csr_neighbor_roam_info_ctx_init(
 		ngbr_roam_info->isESEAssoc = true;
 	} else
 		ngbr_roam_info->isESEAssoc = false;
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-			FL("isESEAssoc is = %d ft = %d"),
-			ngbr_roam_info->isESEAssoc, init_ft_flag);
 #endif
 	/* If "FastRoamEnabled" ini is enabled */
 	if (csr_roam_is_fast_roam_enabled(mac, session_id))
@@ -1034,26 +1026,16 @@ static void csr_neighbor_roam_info_ctx_init(
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 		if (session->roam_synch_in_progress) {
 			if (mac->roam.pReassocResp) {
-				QDF_TRACE(QDF_MODULE_ID_SME,
-					QDF_TRACE_LEVEL_DEBUG,
-					"Free Reassoc Rsp");
 				qdf_mem_free(mac->roam.pReassocResp);
 				mac->roam.pReassocResp = NULL;
 			}
 		} else
 #endif
 		{
-			csr_roam_offload_scan(mac, session_id,
-				ROAM_SCAN_OFFLOAD_START,
-				REASON_CTX_INIT);
+			csr_post_roam_state_change(mac, session_id,
+						   ROAM_RSO_STARTED,
+						   REASON_CTX_INIT);
 
-			if (roam_profile &&
-				roam_profile->supplicant_disabled_roaming) {
-				sme_debug("Supplicant disabled driver roaming");
-				csr_roam_offload_scan(mac, session_id,
-					ROAM_SCAN_OFFLOAD_STOP,
-					REASON_SUPPLICANT_DISABLED_ROAMING);
-			}
 		}
 	}
 }
@@ -1088,16 +1070,16 @@ QDF_STATUS csr_neighbor_roam_indicate_connect(
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sme_debug("Connect ind. received with session id %d in state %s",
+	sme_debug("Connect ind, vdev id %d in state %s",
 		session_id, mac_trace_get_neighbour_roam_state(
 			ngbr_roam_info->neighborRoamState));
 
 	/* Bail out if this is NOT a STA persona */
 	if (mac->roam.roamSession[session_id].pCurRoamProfile->csrPersona !=
 	QDF_STA_MODE) {
-		sme_err("Ignoring Connect ind received from a non STA. session_id: %d, csrPersonna %d",
-			session_id,
-			(int)session->pCurRoamProfile->csrPersona);
+		sme_debug("Ignoring Connect ind received from a non STA. session_id: %d, csrPersonna %d",
+			  session_id,
+			  (int)session->pCurRoamProfile->csrPersona);
 		return QDF_STATUS_SUCCESS;
 	}
 	/* if a concurrent session is running */
@@ -1210,6 +1192,7 @@ static QDF_STATUS csr_neighbor_roam_init11r_assoc_info(struct mac_context *mac)
 QDF_STATUS csr_neighbor_roam_init(struct mac_context *mac, uint8_t sessionId)
 {
 	QDF_STATUS status;
+	tCsrChannelInfo *specific_chan_info;
 	tpCsrNeighborRoamControlInfo pNeighborRoamInfo =
 		&mac->roam.neighborRoamInfo[sessionId];
 
@@ -1244,26 +1227,40 @@ QDF_STATUS csr_neighbor_roam_init(struct mac_context *mac, uint8_t sessionId)
 		mac->mlme_cfg->lfr.neighbor_scan_results_refresh_period;
 	pNeighborRoamInfo->cfgParams.emptyScanRefreshPeriod =
 		mac->mlme_cfg->lfr.empty_scan_refresh_period;
+	pNeighborRoamInfo->cfgParams.full_roam_scan_period =
+		mac->mlme_cfg->lfr.roam_full_scan_period;
+	pNeighborRoamInfo->cfgParams.enable_scoring_for_roam =
+		mac->mlme_cfg->scoring.enable_scoring_for_roam;
+	pNeighborRoamInfo->cfgParams.roam_scan_n_probes =
+		mac->mlme_cfg->lfr.roam_scan_n_probes;
+	pNeighborRoamInfo->cfgParams.roam_scan_home_away_time =
+		mac->mlme_cfg->lfr.roam_scan_home_away_time;
+	pNeighborRoamInfo->cfgParams.roam_scan_inactivity_time =
+		mac->mlme_cfg->lfr.roam_scan_inactivity_time;
+	pNeighborRoamInfo->cfgParams.roam_inactive_data_packet_count =
+		mac->mlme_cfg->lfr.roam_inactive_data_packet_count;
+	pNeighborRoamInfo->cfgParams.roam_scan_period_after_inactivity =
+		mac->mlme_cfg->lfr.roam_scan_period_after_inactivity;
 
-	pNeighborRoamInfo->cfgParams.channelInfo.numOfChannels =
+	specific_chan_info = &pNeighborRoamInfo->cfgParams.specific_chan_info;
+	specific_chan_info->numOfChannels =
 		mac->mlme_cfg->lfr.neighbor_scan_channel_list_num;
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-			FL("number of channels: %u"),
-			pNeighborRoamInfo->cfgParams.channelInfo.numOfChannels);
-	if (pNeighborRoamInfo->cfgParams.channelInfo.numOfChannels != 0) {
-		pNeighborRoamInfo->cfgParams.channelInfo.ChannelList =
-		qdf_mem_malloc(mac->mlme_cfg->lfr.
-			       neighbor_scan_channel_list_num);
+	sme_debug("number of channels: %u", specific_chan_info->numOfChannels);
+	if (specific_chan_info->numOfChannels != 0) {
+		specific_chan_info->ChannelList =
+			qdf_mem_malloc(specific_chan_info->numOfChannels);
 
-		if (!pNeighborRoamInfo->cfgParams.channelInfo.ChannelList)
+		if (!specific_chan_info->ChannelList) {
+			specific_chan_info->numOfChannels = 0;
 			return QDF_STATUS_E_NOMEM;
-
+		}
 	} else {
-		pNeighborRoamInfo->cfgParams.channelInfo.ChannelList = NULL;
+		specific_chan_info->ChannelList = NULL;
 	}
 
 	/* Update the roam global structure from CFG */
-	qdf_mem_copy(pNeighborRoamInfo->cfgParams.channelInfo.ChannelList,
+	qdf_mem_copy(pNeighborRoamInfo->cfgParams.specific_chan_info.
+		     ChannelList,
 		     mac->mlme_cfg->lfr.neighbor_scan_channel_list,
 		     mac->mlme_cfg->lfr.neighbor_scan_channel_list_num);
 	pNeighborRoamInfo->cfgParams.hi_rssi_scan_max_count =
@@ -1274,6 +1271,8 @@ QDF_STATUS csr_neighbor_roam_init(struct mac_context *mac, uint8_t sessionId)
 		mac->mlme_cfg->lfr.roam_scan_hi_rssi_delay;
 	pNeighborRoamInfo->cfgParams.hi_rssi_scan_rssi_ub =
 		mac->mlme_cfg->lfr.roam_scan_hi_rssi_ub;
+	pNeighborRoamInfo->cfgParams.roam_rssi_diff =
+		mac->mlme_cfg->lfr.roam_rssi_diff;
 
 	qdf_zero_macaddr(&pNeighborRoamInfo->currAPbssid);
 	pNeighborRoamInfo->currentNeighborLookupThreshold =
@@ -1294,9 +1293,9 @@ QDF_STATUS csr_neighbor_roam_init(struct mac_context *mac, uint8_t sessionId)
 	status = csr_ll_open(&pNeighborRoamInfo->roamableAPList);
 	if (QDF_STATUS_SUCCESS != status) {
 		sme_err("LL Open of roam able AP List failed");
-		qdf_mem_free(pNeighborRoamInfo->cfgParams.channelInfo.
-			     ChannelList);
-		pNeighborRoamInfo->cfgParams.channelInfo.ChannelList = NULL;
+		qdf_mem_free(specific_chan_info->ChannelList);
+		specific_chan_info->ChannelList = NULL;
+		specific_chan_info->numOfChannels = 0;
 		return QDF_STATUS_E_RESOURCES;
 	}
 
@@ -1311,9 +1310,9 @@ QDF_STATUS csr_neighbor_roam_init(struct mac_context *mac, uint8_t sessionId)
 	status = csr_neighbor_roam_init11r_assoc_info(mac);
 	if (QDF_STATUS_SUCCESS != status) {
 		sme_err("LL Open of roam able AP List failed");
-		qdf_mem_free(pNeighborRoamInfo->cfgParams.channelInfo.
-			     ChannelList);
-		pNeighborRoamInfo->cfgParams.channelInfo.ChannelList = NULL;
+		qdf_mem_free(specific_chan_info->ChannelList);
+		specific_chan_info->ChannelList = NULL;
+		specific_chan_info->numOfChannels = 0;
 		csr_ll_close(&pNeighborRoamInfo->roamableAPList);
 		return QDF_STATUS_E_RESOURCES;
 	}
@@ -1347,11 +1346,9 @@ void csr_neighbor_roam_close(struct mac_context *mac, uint8_t sessionId)
 		return;
 	}
 
-	if (pNeighborRoamInfo->cfgParams.channelInfo.ChannelList)
-		qdf_mem_free(pNeighborRoamInfo->cfgParams.channelInfo.
+	qdf_mem_free(pNeighborRoamInfo->cfgParams.specific_chan_info.
 			     ChannelList);
-
-	pNeighborRoamInfo->cfgParams.channelInfo.ChannelList = NULL;
+	pNeighborRoamInfo->cfgParams.specific_chan_info.ChannelList = NULL;
 
 	/* Should free up the nodes in the list before closing the
 	 * double Linked list
@@ -1382,7 +1379,6 @@ void csr_neighbor_roam_close(struct mac_context *mac, uint8_t sessionId)
 						 &pNeighborRoamInfo->FTRoamInfo.
 						 preAuthDoneList);
 	csr_ll_close(&pNeighborRoamInfo->FTRoamInfo.preAuthDoneList);
-	pNeighborRoamInfo->b_roam_scan_offload_started = false;
 
 	csr_neighbor_roam_state_transition(mac,
 		eCSR_NEIGHBOR_ROAM_STATE_CLOSED, sessionId);
@@ -1641,11 +1637,12 @@ QDF_STATUS csr_neighbor_roam_handoff_req_hdlr(
 	qdf_mem_copy(&roam_ctrl_info->handoffReqInfo.bssid.bytes,
 			&handoff_req->bssid, QDF_MAC_ADDR_SIZE);
 	roam_ctrl_info->uOsRequestedHandoff = 1;
-	status = csr_roam_offload_scan(mac_ctx, session_id,
-		ROAM_SCAN_OFFLOAD_STOP,
-		REASON_OS_REQUESTED_ROAMING_NOW);
+
+	status = csr_post_roam_state_change(mac_ctx, session_id,
+					    ROAM_RSO_STOPPED,
+					    REASON_OS_REQUESTED_ROAMING_NOW);
 	if (QDF_STATUS_SUCCESS != status) {
-		sme_err("csr_roam_offload_scan failed");
+		sme_err("ROAM: RSO stop failed");
 		roam_ctrl_info->uOsRequestedHandoff = 0;
 	}
 	return status;
@@ -1707,8 +1704,8 @@ QDF_STATUS csr_neighbor_roam_start_lfr_scan(struct mac_context *mac,
 	/* There is no candidate or We are not roaming Now.
 	 * Inform the FW to restart Roam Offload Scan
 	 */
-	csr_roam_offload_scan(mac, sessionId, ROAM_SCAN_OFFLOAD_START,
-			      REASON_NO_CAND_FOUND_OR_NOT_ROAMING_NOW);
+	csr_post_roam_state_change(mac, sessionId, ROAM_RSO_STARTED,
+				   REASON_NO_CAND_FOUND_OR_NOT_ROAMING_NOW);
 
 	return QDF_STATUS_SUCCESS;
 

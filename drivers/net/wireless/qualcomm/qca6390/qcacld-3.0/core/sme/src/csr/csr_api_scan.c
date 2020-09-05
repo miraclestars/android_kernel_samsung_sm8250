@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -354,8 +354,6 @@ static void csr_add_to_occupied_channels(struct mac_context *mac,
 					       num_occupied_ch, ch);
 	if (QDF_IS_STATUS_SUCCESS(status)) {
 		occupied_ch->numChannels++;
-		sme_debug("Added channel %d to the list (count=%d)",
-			ch, occupied_ch->numChannels);
 		if (occupied_ch->numChannels >
 		    CSR_BG_SCAN_OCCUPIED_CHANNEL_LIST_LEN)
 			occupied_ch->numChannels =
@@ -478,6 +476,7 @@ static void csr_purge_channel_power(struct mac_context *mac,
 	 * Remove the channel sets from the learned list and put them
 	 * in the free list
 	 */
+	csr_ll_lock(pChannelList);
 	while ((pEntry = csr_ll_remove_head(pChannelList,
 					    LL_ACCESS_NOLOCK)) != NULL) {
 		pChannelSet = GET_BASE_ADDR(pEntry,
@@ -485,6 +484,7 @@ static void csr_purge_channel_power(struct mac_context *mac,
 		if (pChannelSet)
 			qdf_mem_free(pChannelSet);
 	}
+	csr_ll_unlock(pChannelList);
 }
 
 /*
@@ -693,7 +693,8 @@ static void csr_get_channel_power_info(struct mac_context *mac,
 	struct csr_channel_powerinfo *ch_set;
 
 	/* Get 2.4Ghz first */
-	entry = csr_ll_peek_head(list, LL_ACCESS_LOCK);
+	csr_ll_lock(list);
+	entry = csr_ll_peek_head(list, LL_ACCESS_NOLOCK);
 	while (entry && (chn_idx < *num_ch)) {
 		ch_set = GET_BASE_ADDR(entry,
 				struct csr_channel_powerinfo, link);
@@ -704,8 +705,9 @@ static void csr_get_channel_power_info(struct mac_context *mac,
 				 + (idx * ch_set->interChannelOffset));
 			chn_pwr_info[chn_idx++].tx_power = ch_set->txPower;
 		}
-		entry = csr_ll_next(list, entry, LL_ACCESS_LOCK);
+		entry = csr_ll_next(list, entry, LL_ACCESS_NOLOCK);
 	}
+	csr_ll_unlock(list);
 	*num_ch = chn_idx;
 }
 
@@ -1180,7 +1182,7 @@ static void csr_handle_nxt_cmd(struct mac_context *mac_ctx,
 		}
 
 		if (QDF_STATUS_E_FAILURE == ret) {
-			sme_err("conn update fail %d", chan);
+			sme_debug("conn update fail %d", chan);
 			csr_scan_handle_search_for_ssid_failure(mac_ctx,
 								session_id);
 		} else if ((QDF_STATUS_E_NOSUPPORT == ret) ||
@@ -1210,6 +1212,7 @@ void csr_scan_callback(struct wlan_objmgr_vdev *vdev,
 	struct csr_roam_session *session;
 	uint32_t session_id = 0;
 	uint8_t chan = 0;
+	QDF_STATUS status;
 	bool success = false;
 
 	mac_ctx = (struct mac_context *)arg;
@@ -1224,10 +1227,16 @@ void csr_scan_callback(struct wlan_objmgr_vdev *vdev,
 		scan_status = eCSR_SCAN_SUCCESS;
 
 	session_id = wlan_vdev_get_id(vdev);
+	status = sme_acquire_global_lock(&mac_ctx->sme);
+	if (QDF_IS_STATUS_ERROR(status))
+		return;
+
 	if (!CSR_IS_SESSION_VALID(mac_ctx, session_id)) {
 		sme_err("session %d is invalid", session_id);
+		sme_release_global_lock(&mac_ctx->sme);
 		return;
 	}
+
 	session = CSR_GET_SESSION(mac_ctx, session_id);
 
 	sme_debug("Scan Completion: status %d session %d scan_id %d",
@@ -1237,6 +1246,7 @@ void csr_scan_callback(struct wlan_objmgr_vdev *vdev,
 	if (session->scan_info.scan_id != event->scan_id) {
 		sme_debug("Scan Completion on wrong scan_id %d, expected %d",
 			session->scan_info.scan_id, event->scan_id);
+		sme_release_global_lock(&mac_ctx->sme);
 		return;
 	}
 #ifdef FEATURE_WLAN_DIAG_SUPPORT_CSR
@@ -1248,6 +1258,8 @@ void csr_scan_callback(struct wlan_objmgr_vdev *vdev,
 	/* We reuse the command here instead reissue a new command */
 	csr_handle_nxt_cmd(mac_ctx, NextCommand,
 			   session_id, chan);
+
+	sme_release_global_lock(&mac_ctx->sme);
 }
 
 tCsrScanResultInfo *csr_scan_result_get_first(struct mac_context *mac,
@@ -1500,7 +1512,8 @@ static void csr_save_tx_power_to_cfg(struct mac_context *mac,
 		return;
 
 	ch_pwr_set = (tSirMacChanInfo *)(p_buf);
-	pEntry = csr_ll_peek_head(pList, LL_ACCESS_LOCK);
+	csr_ll_lock(pList);
+	pEntry = csr_ll_peek_head(pList, LL_ACCESS_NOLOCK);
 	/*
 	 * write the tuples (startChan, numChan, txPower) for each channel found
 	 * in the channel power list.
@@ -1534,22 +1547,16 @@ static void csr_save_tx_power_to_cfg(struct mac_context *mac,
 				ch_pwr_set->firstChanNum = (tSirMacChanNum)
 					(ch_set->firstChannel + (idx *
 						ch_set->interChannelOffset));
-				sme_debug(
-					"Setting Channel Number %d",
-					ch_pwr_set->firstChanNum);
 				ch_pwr_set->numChannels = 1;
 				ch_pwr_set->maxTxPower =
 					QDF_MIN(ch_set->txPower,
 					mac->mlme_cfg->power.max_tx_power);
-				sme_debug(
-					"Setting Max Transmit Power %d",
-					ch_pwr_set->maxTxPower);
 				cbLen += sizeof(tSirMacChanInfo);
 				ch_pwr_set++;
 				count++;
 			}
 		} else {
-			if (cbLen >= dataLen) {
+			if (cbLen + sizeof(tSirMacChanInfo) >= dataLen) {
 				/* this entry will overflow our allocation */
 				sme_err(
 					"Buffer overflow, start %d, num %d, offset %d",
@@ -1559,21 +1566,16 @@ static void csr_save_tx_power_to_cfg(struct mac_context *mac,
 				break;
 			}
 			ch_pwr_set->firstChanNum = ch_set->firstChannel;
-			sme_debug("Setting Channel Number %d",
-				ch_pwr_set->firstChanNum);
 			ch_pwr_set->numChannels = ch_set->numChannels;
 			ch_pwr_set->maxTxPower = QDF_MIN(ch_set->txPower,
 					mac->mlme_cfg->power.max_tx_power);
-			sme_debug(
-				"Setting Max Tx Power %d, nTxPower %d",
-				ch_pwr_set->maxTxPower,
-				mac->mlme_cfg->power.max_tx_power);
 			cbLen += sizeof(tSirMacChanInfo);
 			ch_pwr_set++;
 			count++;
 		}
-		pEntry = csr_ll_next(pList, pEntry, LL_ACCESS_LOCK);
+		pEntry = csr_ll_next(pList, pEntry, LL_ACCESS_NOLOCK);
 	}
+	csr_ll_unlock(pList);
 	if (band == BAND_2G) {
 		mac->mlme_cfg->power.max_tx_power_24.len = 3 * count;
 		qdf_mem_copy(mac->mlme_cfg->power.max_tx_power_24.data,
@@ -1595,7 +1597,7 @@ static void csr_set_cfg_country_code(struct mac_context *mac,
 	uint8_t cc[CFG_COUNTRY_CODE_LEN];
 	/* v_REGDOMAIN_t DomainId */
 
-	sme_debug("Setting Country Code in Cfg %s", countryCode);
+	sme_debug("Set Country in Cfg %s", countryCode);
 	qdf_mem_copy(cc, countryCode, CFG_COUNTRY_CODE_LEN);
 
 	/*
@@ -1621,7 +1623,6 @@ static void csr_set_cfg_country_code(struct mac_context *mac,
 	 */
 	qdf_mem_copy(mac->mlme_cfg->reg.country_code, cc, CFG_COUNTRY_CODE_LEN);
 	mac->mlme_cfg->reg.country_code_len = CFG_COUNTRY_CODE_LEN;
-	sme_debug("CFG_COUNTRY_CODE changed");
 	sch_edca_profile_update_all(mac);
 	/*
 	 * Need to let HALPHY know about the current domain so it can apply some
@@ -1663,7 +1664,7 @@ QDF_STATUS csr_scan_abort_mac_scan(struct mac_context *mac_ctx,
 				vdev_id, WLAN_LEGACY_SME_ID);
 
 	if (!vdev) {
-		sme_err("Failed get vdev");
+		sme_debug("Failed get vdev");
 		qdf_mem_free(req);
 		return QDF_STATUS_E_INVAL;
 	}
@@ -1685,54 +1686,6 @@ QDF_STATUS csr_scan_abort_mac_scan(struct mac_context *mac_ctx,
 
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_SME_ID);
 
-	return status;
-}
-QDF_STATUS csr_remove_nonscan_cmd_from_pending_list(struct mac_context *mac,
-						    uint8_t sessionId,
-						    eSmeCommandType commandType)
-{
-	tDblLinkList localList;
-	tListElem *pEntry;
-	tSmeCmd *pCommand;
-	tListElem *pEntryToRemove;
-	QDF_STATUS status = QDF_STATUS_E_FAILURE;
-
-	qdf_mem_zero(&localList, sizeof(tDblLinkList));
-	if (!QDF_IS_STATUS_SUCCESS(csr_ll_open(&localList))) {
-		sme_err("failed to open list");
-		return status;
-	}
-
-	pEntry = csr_nonscan_pending_ll_peek_head(mac, LL_ACCESS_NOLOCK);
-
-	/*
-	 * Have to make sure we don't loop back to the head of the list,
-	 * which will happen if the entry is NOT on the list
-	 */
-	while (pEntry) {
-		pEntryToRemove = pEntry;
-		pEntry = csr_nonscan_pending_ll_next(mac,
-					pEntry, LL_ACCESS_NOLOCK);
-		pCommand = GET_BASE_ADDR(pEntryToRemove, tSmeCmd, Link);
-
-		if ((pCommand->command == commandType) &&
-		    (pCommand->sessionId == sessionId)) {
-			/* Insert to localList and remove later */
-			csr_ll_insert_tail(&localList, pEntryToRemove,
-					   LL_ACCESS_NOLOCK);
-			status = QDF_STATUS_SUCCESS;
-		}
-	}
-
-
-	while ((pEntry = csr_ll_remove_head(&localList, LL_ACCESS_NOLOCK))) {
-		pCommand = GET_BASE_ADDR(pEntry, tSmeCmd, Link);
-		sme_debug("Sending abort for command ID %d",
-			sessionId);
-		csr_release_command(mac, pCommand);
-	}
-
-	csr_ll_close(&localList);
 	return status;
 }
 
@@ -1955,6 +1908,8 @@ csr_get_channel_for_hw_mode_change(struct mac_context *mac_ctx,
 	}
 
 	if (!policy_mgr_is_hw_dbs_2x2_capable(mac_ctx->psoc) &&
+	    !policy_mgr_is_hw_dbs_required_for_band(mac_ctx->psoc,
+		HW_MODE_MAC_BAND_2G) &&
 	    !policy_mgr_get_connection_count(mac_ctx->psoc)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			  FL("1x1 DBS HW with no prior connection"));
@@ -1973,7 +1928,9 @@ csr_get_channel_for_hw_mode_change(struct mac_context *mac_ctx,
 		scan_result = GET_BASE_ADDR(next_element,
 					    struct tag_csrscan_result,
 					    Link);
-		if (policy_mgr_is_hw_dbs_2x2_capable(mac_ctx->psoc)) {
+		if (policy_mgr_is_hw_dbs_required_for_band(
+				mac_ctx->psoc,
+				HW_MODE_MAC_BAND_2G)) {
 			if (WLAN_REG_IS_24GHZ_CH
 				(scan_result->Result.BssDescriptor.channelId)) {
 				channel_id =
@@ -2388,8 +2345,8 @@ static QDF_STATUS csr_prepare_scan_filter(struct mac_context *mac_ctx,
 
 	filter->num_of_channels =
 		pFilter->ChannelInfo.numOfChannels;
-	if (filter->num_of_channels > QDF_MAX_NUM_CHAN)
-		filter->num_of_channels = QDF_MAX_NUM_CHAN;
+	if (filter->num_of_channels > NUM_CHANNELS)
+		filter->num_of_channels = NUM_CHANNELS;
 	qdf_mem_copy(filter->channel_list,
 			pFilter->ChannelInfo.ChannelList,
 			filter->num_of_channels);
@@ -2475,7 +2432,7 @@ static QDF_STATUS csr_prepare_scan_filter(struct mac_context *mac_ctx,
 		   &pFilter->csrPersona, &new_mode)) {
 			status = policy_mgr_get_pcl(mac_ctx->psoc, new_mode,
 				filter->pcl_channel_list, &len,
-				filter->pcl_weight_list, QDF_MAX_NUM_CHAN);
+				filter->pcl_weight_list, NUM_CHANNELS);
 			filter->num_of_pcl_channels = (uint8_t)len;
 		}
 	}
@@ -2570,6 +2527,29 @@ static bool csr_is_assoc_disallowed(struct mac_context *mac_ctx,
 	return mbo_ie.assoc_disallowed.present;
 }
 
+#if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
+/**
+ * csr_fill_single_pmk_ap_cap_from_scan_entry() - WAP3_SPMK VSIE from scan
+ * entry
+ * @bss_desc: BSS Descriptor
+ * @scan_entry: scan entry
+ *
+ * Return: None
+ */
+static void
+csr_fill_single_pmk_ap_cap_from_scan_entry(struct bss_description *bss_desc,
+					   struct scan_cache_entry *scan_entry)
+{
+	bss_desc->is_single_pmk = util_scan_entry_single_pmk(scan_entry);
+}
+
+#else
+static inline void
+csr_fill_single_pmk_ap_cap_from_scan_entry(struct bss_description *bss_desc,
+					   struct scan_cache_entry *scan_entry)
+{
+}
+#endif
 static QDF_STATUS csr_fill_bss_from_scan_entry(struct mac_context *mac_ctx,
 					struct scan_cache_entry *scan_entry,
 					struct tag_csrscan_result **p_result)
@@ -2582,6 +2562,17 @@ static QDF_STATUS csr_fill_bss_from_scan_entry(struct mac_context *mac_ctx,
 	struct tag_csrscan_result *bss;
 	uint32_t bss_len, alloc_len, ie_len;
 	QDF_STATUS status;
+	enum channel_state ap_channel_state;
+
+	ap_channel_state =
+		wlan_reg_get_channel_state(mac_ctx->pdev,
+					   scan_entry->channel.chan_idx);
+	if (ap_channel_state == CHANNEL_STATE_DISABLE ||
+	    ap_channel_state == CHANNEL_STATE_INVALID) {
+		sme_err("BSS %pM channel %d invalid, not populating this BSSID",
+			scan_entry->bssid.bytes, scan_entry->channel.chan_idx);
+		return QDF_STATUS_E_INVAL;
+	}
 
 	ie_len = util_scan_entry_ie_len(scan_entry);
 	ie_ptr = util_scan_entry_ie_data(scan_entry);
@@ -2660,6 +2651,12 @@ static QDF_STATUS csr_fill_bss_from_scan_entry(struct mac_context *mac_ctx,
 	bss_desc->assoc_disallowed = csr_is_assoc_disallowed(mac_ctx,
 							     scan_entry);
 	bss_desc->adaptive_11r_ap = scan_entry->adaptive_11r_ap;
+
+	bss_desc->mbo_oce_enabled_ap =
+			util_scan_entry_mbo_oce(scan_entry) ? true : false;
+
+	csr_fill_single_pmk_ap_cap_from_scan_entry(bss_desc, scan_entry);
+
 	qdf_mem_copy(&bss_desc->mbssid_info, &scan_entry->mbssid_info,
 		     sizeof(struct scan_mbssid_info));
 
@@ -2706,32 +2703,26 @@ static QDF_STATUS csr_parse_scan_list(struct mac_context *mac_ctx,
 				      struct scan_result_list *ret_list,
 				      qdf_list_t *scan_list)
 {
-	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	struct tag_csrscan_result *pResult = NULL;
 	struct scan_cache_node *cur_node = NULL;
 	struct scan_cache_node *next_node = NULL;
 
-	status =
-		qdf_list_peek_front(scan_list,
-		   (qdf_list_node_t **) &cur_node);
+	qdf_list_peek_front(scan_list, (qdf_list_node_t **) &cur_node);
 
 	while (cur_node) {
-		qdf_list_peek_next(
-		  scan_list,
-		  (qdf_list_node_t *) cur_node,
-		  (qdf_list_node_t **) &next_node);
-		status = csr_fill_bss_from_scan_entry(mac_ctx,
-			cur_node->entry, &pResult);
-		if (QDF_IS_STATUS_ERROR(status))
-			return status;
+		qdf_list_peek_next(scan_list, (qdf_list_node_t *) cur_node,
+				  (qdf_list_node_t **) &next_node);
+		pResult = NULL;
+		csr_fill_bss_from_scan_entry(mac_ctx,
+					     cur_node->entry, &pResult);
 		if (pResult)
 			csr_ll_insert_tail(&ret_list->List, &pResult->Link,
-			   LL_ACCESS_NOLOCK);
+					   LL_ACCESS_NOLOCK);
 		cur_node = next_node;
 		next_node = NULL;
 	}
 
-	return status;
+	return QDF_STATUS_SUCCESS;
 }
 
 /**
@@ -2779,7 +2770,7 @@ QDF_STATUS csr_scan_get_result(struct mac_context *mac_ctx,
 	qdf_list_t *list = NULL;
 	struct scan_filter *filter = NULL;
 	struct wlan_objmgr_pdev *pdev = NULL;
-	uint32_t num_bss;
+	uint32_t num_bss = 0;
 
 	if (results)
 		*results = CSR_INVALID_SCANRESULT_HANDLE;
@@ -2807,16 +2798,20 @@ QDF_STATUS csr_scan_get_result(struct mac_context *mac_ctx,
 
 	list = ucfg_scan_get_result(pdev,
 		    pFilter ? filter : NULL);
-	if (list)
-		sme_debug("num_entries %d", qdf_list_size(list));
-
+	if (list) {
+		num_bss = qdf_list_size(list);
+		sme_debug("num_entries %d", num_bss);
+	}
 	/* Filter the scan list with the blacklist, rssi reject, avoided APs */
 	if (pFilter && pFilter->csrPersona == QDF_STA_MODE)
 		wlan_blm_filter_bssid(pdev, list);
 
 	if (!list || (list && !qdf_list_size(list))) {
 		sme_debug("scan list empty");
-		status = QDF_STATUS_E_NULL_VALUE;
+		if (num_bss)
+			status = QDF_STATUS_E_EXISTS;
+		else
+			status = QDF_STATUS_E_NULL_VALUE;
 		goto error;
 	}
 
@@ -2828,11 +2823,7 @@ QDF_STATUS csr_scan_get_result(struct mac_context *mac_ctx,
 
 	csr_ll_open(&ret_list->List);
 	ret_list->pCurEntry = NULL;
-	status = csr_parse_scan_list(mac_ctx,
-		ret_list, list);
-	num_bss = csr_ll_count(&ret_list->List);
-	sme_debug("status: %d No of BSS: %d",
-		  status, num_bss);
+	status = csr_parse_scan_list(mac_ctx, ret_list, list);
 	if (QDF_IS_STATUS_ERROR(status) || !results)
 		/* Fail or No one wants the result. */
 		csr_scan_result_purge(mac_ctx, (tScanResultHandle) ret_list);
@@ -2974,6 +2965,27 @@ void csr_remove_bssid_from_scan_list(struct mac_context *mac_ctx,
 	csr_flush_bssid(mac_ctx, bssid);
 }
 
+static void csr_dump_occupied_chan_list(struct csr_channel *occupied_ch)
+{
+	uint8_t idx;
+	uint32_t buff_len;
+	char *chan_buff;
+	uint32_t len = 0;
+
+	buff_len = (occupied_ch->numChannels * 5) + 1;
+	chan_buff = qdf_mem_malloc(buff_len);
+	if (!chan_buff)
+		return;
+
+	for (idx = 0; idx < occupied_ch->numChannels; idx++)
+		len += qdf_scnprintf(chan_buff + len, buff_len - len, " %d",
+				     occupied_ch->channelList[idx]);
+
+	sme_nofl_debug("Occupied chan list[%d]:%s",
+		       occupied_ch->numChannels, chan_buff);
+
+	qdf_mem_free(chan_buff);
+}
 void csr_init_occupied_channels_list(struct mac_context *mac_ctx,
 				     uint8_t sessionId)
 {
@@ -2993,21 +3005,12 @@ void csr_init_occupied_channels_list(struct mac_context *mac_ctx,
 		sme_debug("Invalid session");
 		return;
 	}
-	if (neighbor_roam_info->cfgParams.channelInfo.numOfChannels) {
+	if (neighbor_roam_info->cfgParams.specific_chan_info.numOfChannels) {
 		/*
 		 * Ini file contains neighbor scan channel list, hence NO need
 		 * to build occupied channel list"
 		 */
 		sme_debug("Ini contains neighbor scan ch list");
-		return;
-	}
-
-	if (!csr_neighbor_roam_is_new_connected_profile(mac_ctx, sessionId)) {
-		/*
-		 * Do not flush occupied list since current roam profile matches
-		 * previous
-		 */
-		sme_debug("Current roam profile matches prev");
 		return;
 	}
 
@@ -3032,6 +3035,7 @@ void csr_init_occupied_channels_list(struct mac_context *mac_ctx,
 	filter->ssid_list[0].length = profile->SSID.length;
 	qdf_mem_copy(filter->ssid_list[0].ssid, profile->SSID.ssId,
 		     profile->SSID.length);
+	csr_update_pmf_cap_from_connected_profile(profile, filter);
 
 	pdev = wlan_objmgr_get_pdev_by_id(mac_ctx->psoc, 0, WLAN_LEGACY_MAC_ID);
 
@@ -3054,11 +3058,12 @@ void csr_init_occupied_channels_list(struct mac_context *mac_ctx,
 	if (list)
 		sme_debug("num_entries %d", qdf_list_size(list));
 	if (!list || (list && !qdf_list_size(list))) {
-		sme_err("get scan result failed");
 		wlan_objmgr_pdev_release_ref(pdev, WLAN_LEGACY_MAC_ID);
 		qdf_mem_free(filter);
 		if (list)
 			ucfg_scan_purge_results(list);
+		csr_dump_occupied_chan_list(
+			&mac_ctx->scan.occupiedChannels[sessionId]);
 		return;
 	}
 
@@ -3076,6 +3081,7 @@ void csr_init_occupied_channels_list(struct mac_context *mac_ctx,
 		cur_lst = next_lst;
 		next_lst = NULL;
 	}
+	csr_dump_occupied_chan_list(&mac_ctx->scan.occupiedChannels[sessionId]);
 
 	qdf_mem_free(filter);
 	ucfg_scan_purge_results(list);

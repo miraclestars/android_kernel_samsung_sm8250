@@ -51,6 +51,7 @@
 #include <cdp_txrx_cmn.h>
 #include <cdp_txrx_peer_ops.h>
 #include "dot11f.h"
+#include "wlan_p2p_cfg_api.h"
 
 static last_processed_msg rrm_link_action_frm;
 
@@ -78,9 +79,6 @@ void lim_stop_tx_and_switch_channel(struct mac_context *mac, uint8_t sessionId)
 		pe_debug("Avoid Switch Channel req during pre auth");
 		return;
 	}
-
-	pe_debug("Channel switch Mode: %d",
-		       pe_session->gLimChannelSwitch.switchMode);
 
 	mac->lim.limTimers.gLimChannelSwitchTimer.sessionId = sessionId;
 	status = policy_mgr_check_and_set_hw_mode_for_channel_switch(mac->psoc,
@@ -357,6 +355,15 @@ lim_process_ext_channel_switch_action_frame(struct mac_context *mac_ctx,
 	} else if (DOT11F_WARNED(status)) {
 		pe_debug("There were warnings while unpacking CHANSW Request (0x%08x, %d bytes):",
 		  status, frame_len);
+	}
+
+	if (!wlan_reg_is_6ghz_supported(mac_ctx->pdev) &&
+	    (wlan_reg_is_6ghz_op_class(mac_ctx->pdev,
+				       ext_channel_switch_frame->
+				       ext_chan_switch_ann_action.op_class))) {
+		pe_err("channel belongs to 6 ghz spectrum, abort");
+		qdf_mem_free(ext_channel_switch_frame);
+		return;
 	}
 
 	target_channel =
@@ -1279,7 +1286,8 @@ __lim_process_radio_measure_request(struct mac_context *mac, uint8_t *pRxPacketI
 			 HIGH_SEQ_NUM_OFFSET) |
 			pHdr->seqControl.seqNumLo);
 	if (curr_seq_num == mac->rrm.rrmPEContext.prev_rrm_report_seq_num &&
-	    mac->rrm.rrmPEContext.pCurrentReq) {
+	    (mac->rrm.rrmPEContext.pCurrentReq[DEFAULT_RRM_IDX] ||
+	     mac->rrm.rrmPEContext.pCurrentReq[DEFAULT_RRM_IDX + 1])) {
 		pe_err("rrm report req frame, seq num: %d is already in progress, drop it",
 			curr_seq_num);
 		return;
@@ -1307,8 +1315,8 @@ __lim_process_radio_measure_request(struct mac_context *mac, uint8_t *pRxPacketI
 				   pBody, frameLen);
 		goto err;
 	} else if (DOT11F_WARNED(nStatus)) {
-		pe_debug("There were warnings while unpacking a Radio Measure request (0x%08x, %d bytes):",
-			nStatus, frameLen);
+		pe_debug("Warnings while unpacking a Radio Measure request (0x%08x, %d bytes):",
+			 nStatus, frameLen);
 	}
 	/* Call rrm function to handle the request. */
 
@@ -1395,6 +1403,7 @@ __lim_process_neighbor_report(struct mac_context *mac, uint8_t *pRxPacketInfo,
 		pe_debug("There were warnings while unpacking a Neighbor report response (0x%08x, %d bytes):",
 			nStatus, frameLen);
 	}
+
 	/* Call rrm function to handle the request. */
 	rrm_process_neighbor_report_response(mac, pFrm, pe_session);
 
@@ -1594,22 +1603,18 @@ lim_drop_unprotected_action_frame(struct mac_context *mac, struct pe_session *pe
 	tpDphHashNode sta;
 	bool rmfConnection = false;
 
-	if (LIM_IS_AP_ROLE(pe_session)) {
-		sta =
-			dph_lookup_hash_entry(mac, pHdr->sa, &aid,
-					      &pe_session->dph.dphHashTable);
-		if (sta)
-			if (sta->rmfEnabled)
-				rmfConnection = true;
-	} else if (pe_session->limRmfEnabled)
+	sta = dph_lookup_hash_entry(mac, pHdr->sa, &aid,
+				    &pe_session->dph.dphHashTable);
+	if (sta && sta->rmfEnabled)
 		rmfConnection = true;
 
 	if (rmfConnection && (pHdr->fc.wep == 0)) {
 		pe_err("Dropping unprotected Action category: %d frame since RMF is enabled",
 			category);
 		return true;
-	} else
-		return false;
+	}
+
+	return false;
 }
 #endif
 
@@ -1645,8 +1650,7 @@ static void lim_process_addba_req(struct mac_context *mac_ctx, uint8_t *rx_pkt_i
 	body_ptr = WMA_GET_RX_MPDU_DATA(rx_pkt_info);
 	frame_len = WMA_GET_RX_PAYLOAD_LEN(rx_pkt_info);
 
-	QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE, QDF_TRACE_LEVEL_INFO,
-			   body_ptr, frame_len);
+	QDF_TRACE_HEX_DUMP_DEBUG_RL(QDF_MODULE_ID_PE, body_ptr, frame_len);
 
 	addba_req = qdf_mem_malloc(sizeof(*addba_req));
 	if (!addba_req)
@@ -1664,6 +1668,11 @@ static void lim_process_addba_req(struct mac_context *mac_ctx, uint8_t *rx_pkt_i
 		pe_warn("warning: unpack addba Req(0x%08x, %d bytes)",
 			status, frame_len);
 	}
+	pe_debug("token %d tid %d timeout %d buff_size %d ssn %d",
+		 addba_req->DialogToken.token, addba_req->addba_param_set.tid,
+		 addba_req->ba_timeout.timeout,
+		 addba_req->addba_param_set.buff_size,
+		 addba_req->ba_start_seq_ctrl.ssn);
 
 	peer = cdp_peer_get_ref_by_addr(soc, pdev, mac_hdr->sa, &peer_id,
 					PEER_DEBUG_ID_WMA_ADDBA_REQ);
@@ -1679,16 +1688,25 @@ static void lim_process_addba_req(struct mac_context *mac_ctx, uint8_t *rx_pkt_i
 			addba_req->addba_param_set.buff_size,
 			addba_req->ba_start_seq_ctrl.ssn);
 
-	cdp_peer_release_ref(soc, peer, PEER_DEBUG_ID_WMA_ADDBA_REQ);
-
 	if (QDF_STATUS_SUCCESS == qdf_status) {
-		lim_send_addba_response_frame(mac_ctx, mac_hdr->sa,
-			addba_req->addba_param_set.tid, session,
+		qdf_status = lim_send_addba_response_frame(mac_ctx,
+			mac_hdr->sa,
+			addba_req->addba_param_set.tid,
+			session,
 			addba_req->addba_extn_element.present,
-			addba_req->addba_param_set.amsdu_supp);
+			addba_req->addba_param_set.amsdu_supp,
+			mac_hdr->fc.wep);
+		if (qdf_status != QDF_STATUS_SUCCESS) {
+			pe_err("Failed to send addba response frame");
+			cdp_addba_resp_tx_completion(soc, peer,
+				addba_req->addba_param_set.tid,
+				WMI_MGMT_TX_COMP_TYPE_DISCARD);
+		}
 	} else {
-		pe_err("Failed to process addba request");
+		pe_err_rl("Failed to process addba request");
 	}
+
+	cdp_peer_release_ref(soc, peer, PEER_DEBUG_ID_WMA_ADDBA_REQ);
 
 error:
 	qdf_mem_free(addba_req);
@@ -1930,6 +1948,15 @@ void lim_process_action_frame(struct mac_context *mac_ctx,
 		case SIR_MAC_WNM_BSS_TM_QUERY:
 		case SIR_MAC_WNM_BSS_TM_REQUEST:
 		case SIR_MAC_WNM_BSS_TM_RESPONSE:
+			if (cfg_p2p_is_roam_config_disabled(mac_ctx->psoc) &&
+			    session && LIM_IS_STA_ROLE(session) &&
+			    (policy_mgr_mode_specific_connection_count(
+				mac_ctx->psoc, PM_P2P_CLIENT_MODE, NULL) ||
+			     policy_mgr_mode_specific_connection_count(
+				mac_ctx->psoc, PM_P2P_GO_MODE, NULL))) {
+				pe_debug("p2p session active drop BTM frame");
+				break;
+			}
 		case SIR_MAC_WNM_NOTIF_REQUEST:
 		case SIR_MAC_WNM_NOTIF_RESPONSE:
 			rssi = WMA_GET_RX_RSSI_NORMALIZED(rx_pkt_info);
@@ -2093,8 +2120,8 @@ void lim_process_action_frame(struct mac_context *mac_ctx,
 					rx_pkt_info), RXMGMT_FLAG_NONE);
 			break;
 		default:
-			pe_warn("Unhandled public action frame: %x",
-				action_hdr->actionID);
+			pe_debug("Unhandled public action frame: %d",
+				 action_hdr->actionID);
 			break;
 		}
 		break;
@@ -2176,7 +2203,7 @@ void lim_process_action_frame(struct mac_context *mac_ctx,
 				RXMGMT_FLAG_NONE);
 			break;
 		default:
-			pe_warn("Unhandled - Protected Dual Public Action");
+			pe_debug("Unhandled - Protected Dual Public Action");
 			break;
 		}
 		break;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -100,7 +100,7 @@ typedef struct sDphHashNode {
 	uint8_t fAniCount:1;
 	uint8_t rmfEnabled:1;
 	/* LIM state */
-	tLimMlmStaContext mlmStaContext;
+	struct lim_sta_context mlmStaContext;
 	/* qos parameter info */
 	tDphQosParams qos;
 	/*
@@ -152,6 +152,7 @@ typedef struct sDphHashNode {
 	uint8_t vhtSupportedRxNss;
 	uint8_t vhtBeamFormerCapable;
 	uint8_t vht_su_bfee_capable;
+	uint8_t vht_mcs_10_11_supp;
 #ifdef WLAN_FEATURE_11W
 	TX_TIMER pmfSaQueryTimer;
 	uint16_t pmfSaQueryCurrentTransId;
@@ -169,8 +170,6 @@ typedef struct sDphHashNode {
 	/* key installed for this STA or not in the firmware */
 	uint8_t is_key_installed;
 	uint8_t is_disassoc_deauth_in_progress;
-	qdf_time_t last_assoc_received_time;
-	qdf_time_t last_disassoc_deauth_received_time;
 
 	uint8_t nss;
 	int8_t del_sta_ctx_rssi;
