@@ -1040,6 +1040,8 @@ struct ipa3_sys_context {
 	struct workqueue_struct *repl_wq;
 	struct ipa3_status_stats *status_stat;
 	u32 pm_hdl;
+	unsigned int napi_sch_cnt;
+	unsigned int napi_comp_cnt;
 	struct workqueue_struct *tasklet_wq;
 	/* ordering is important - other immutable fields go below */
 };
