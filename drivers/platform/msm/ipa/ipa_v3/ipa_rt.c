@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/bitops.h>
@@ -1743,7 +1743,8 @@ int __ipa3_del_rt_rule(u32 rule_hdl)
 		return -EINVAL;
 	}
 
-	if (!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
+	if (!ipa3_check_idr_if_freed(entry) &&
+		!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
 		IPADBG("Deleting rule from default rt table idx=%u\n",
 			entry->tbl->idx);
 		if (entry->tbl->rule_cnt == 1) {
@@ -1972,7 +1973,8 @@ int ipa3_reset_rt(enum ipa_ip_type ip, bool user_only)
 				}
 				tbl->rule_cnt--;
 				list_del(&rule->link);
-				if (rule->hdr)
+				if (rule->hdr &&
+					(!ipa3_check_idr_if_freed(rule->hdr)))
 					__ipa3_release_hdr(rule->hdr->id);
 				else if (rule->proc_ctx &&
 					(!ipa3_check_idr_if_freed(
@@ -2163,7 +2165,8 @@ static int __ipa_mdfy_rt_rule(struct ipa_rt_rule_mdfy_i *rtrule)
 		goto error;
 	}
 
-	if (!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
+	if (!ipa3_check_idr_if_freed(entry) &&
+		!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
 		IPAERR_RL("Default tbl rule cannot be modified\n");
 		return -EINVAL;
 	}
