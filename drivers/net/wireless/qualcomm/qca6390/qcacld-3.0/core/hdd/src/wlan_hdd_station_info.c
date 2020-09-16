@@ -1056,20 +1056,26 @@ static void hdd_get_peer_stats(struct qdf_mac_addr mac_addr,
 			       struct hdd_station_info *stainfo)
 {
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
-	struct cdp_pdev *txrx_pdev = cds_get_context(QDF_MODULE_ID_TXRX);
-	struct cdp_peer *peer;
-	uint8_t peer_id;
 	struct cdp_peer_stats *peer_stats;
+	QDF_STATUS status;
 
-	peer = cdp_peer_find_by_addr(soc, txrx_pdev, mac_addr.bytes, &peer_id);
-	if (peer) {
-		peer_stats = cdp_host_get_peer_stats(soc, peer);
-		if (peer_stats) {
-			stainfo->rx_retry_cnt = peer_stats->rx.rx_retries;
-			stainfo->rx_mc_bc_cnt = peer_stats->rx.multicast.num +
-						peer_stats->rx.bcast.num;
-		}
+	peer_stats = qdf_mem_malloc(sizeof(*peer_stats));
+	if (!peer_stats)
+		return;
+
+	status = cdp_host_get_peer_stats(soc, CDP_INVALID_VDEV_ID,
+					 mac_addr.bytes, peer_stats);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		hdd_err("cdp_host_get_peer_stats failed");
+		qdf_mem_free(peer_stats);
+		return;
 	}
+
+	stainfo->rx_retry_cnt = peer_stats->rx.rx_retries;
+	stainfo->rx_mc_bc_cnt = peer_stats->rx.multicast.num +
+				peer_stats->rx.bcast.num;
+
+	qdf_mem_free(peer_stats);
 }
 
 /**

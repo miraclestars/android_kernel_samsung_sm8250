@@ -6450,25 +6450,22 @@ void wlan_hdd_register_cp_stats_cb(struct hdd_context *hdd_ctx)
 
 QDF_STATUS hdd_update_sta_arp_stats(struct hdd_adapter *adapter)
 {
-	struct cdp_pdev *txrx_pdev = cds_get_context(QDF_MODULE_ID_TXRX);
-	struct cdp_peer *peer;
-	uint8_t peer_id;
+	ol_txrx_soc_handle soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct cdp_peer_stats *peer_stats;
 	struct hdd_station_ctx *sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
 	struct hdd_arp_stats_s *arp_stats;
+	QDF_STATUS status;
 
-	peer = cdp_peer_find_by_addr(cds_get_context(QDF_MODULE_ID_SOC),
-				     txrx_pdev, sta_ctx->conn_info.bssid.bytes,
-				     &peer_id);
-
-	if (!peer)
-		return QDF_STATUS_E_FAILURE;
-
-	peer_stats = cdp_host_get_peer_stats(cds_get_context(QDF_MODULE_ID_SOC),
-					     peer);
-
+	peer_stats = qdf_mem_malloc(sizeof(*peer_stats));
 	if (!peer_stats)
-		return QDF_STATUS_E_FAILURE;
+		return QDF_STATUS_E_NOMEM;
+
+	status = cdp_host_get_peer_stats(soc, adapter->vdev_id,
+					 sta_ctx->conn_info.bssid.bytes,
+					 peer_stats);
+
+	if (QDF_IS_STATUS_ERROR(status))
+		goto done;
 
 	arp_stats = &adapter->hdd_stats.hdd_arp_stats;
 
@@ -6477,5 +6474,8 @@ QDF_STATUS hdd_update_sta_arp_stats(struct hdd_adapter *adapter)
 	arp_stats->tx_ack_cnt = arp_stats->tx_host_fw_sent -
 				peer_stats->tx.no_ack_count[QDF_PROTO_ARP_REQ];
 
-	return QDF_STATUS_SUCCESS;
+done:
+	qdf_mem_free(peer_stats);
+
+	return status;
 }
