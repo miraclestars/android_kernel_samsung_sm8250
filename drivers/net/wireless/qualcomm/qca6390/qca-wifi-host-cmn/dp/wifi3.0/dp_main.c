@@ -8047,18 +8047,27 @@ static void dp_txrx_update_vdev_host_stats(struct cdp_vdev *vdev_handle,
 }
 
 /* dp_txrx_get_peer_stats - will return cdp_peer_stats
- * @peer_handle: DP_PEER handle
- *
- * return : cdp_peer_stats pointer
+ * @soc: soc handle
+ * @vdev_id: id of vdev handle
+ * @peer_mac: mac of DP_PEER handle
+ * @peer_stats: buffer to copy to
+ * return : status success/failure
  */
-static struct cdp_peer_stats*
-		dp_txrx_get_peer_stats(struct cdp_peer *peer_handle)
+static QDF_STATUS
+dp_txrx_get_peer_stats(struct cdp_soc_t *soc, uint8_t vdev_id,
+		       uint8_t *peer_mac, struct cdp_peer_stats *peer_stats)
 {
-	struct dp_peer *peer = (struct dp_peer *)peer_handle;
+	struct dp_peer *peer = dp_peer_find_hash_find((struct dp_soc *)soc,
+						       peer_mac, 0, vdev_id);
 
-	qdf_assert(peer);
+	if (!peer)
+		return QDF_STATUS_E_FAILURE;
 
-	return &peer->stats;
+	qdf_mem_copy(peer_stats, &peer->stats, sizeof(*peer_stats));
+
+	dp_peer_unref_delete(peer);
+
+	return QDF_STATUS_SUCCESS;
 }
 
 /* dp_txrx_reset_peer_stats - reset cdp_peer_stats for particular peer

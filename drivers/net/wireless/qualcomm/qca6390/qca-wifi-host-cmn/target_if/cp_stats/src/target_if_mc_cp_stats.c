@@ -105,10 +105,7 @@ static void target_if_cp_stats_extract_peer_extd_stats(
 	uint32_t i;
 	wmi_host_peer_extd_stats peer_extd_stats;
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
-	struct cdp_pdev *txrx_pdev = cds_get_context(QDF_MODULE_ID_TXRX);
 	struct cdp_peer_stats *peer_stats;
-	struct cdp_peer *peer;
-	uint8_t peer_id;
 
 	if (!stats_param->num_peer_extd_stats)
 		return;
@@ -134,17 +131,20 @@ static void target_if_cp_stats_extract_peer_extd_stats(
 		ev->peer_extended_stats[i].rx_mc_bc_cnt =
 						peer_extd_stats.rx_mc_bc_cnt;
 
-		peer = cdp_peer_find_by_addr(soc, txrx_pdev,
-					ev->peer_extended_stats[i].peer_macaddr,
-					&peer_id);
-		if (!peer)
+		peer_stats = qdf_mem_malloc(sizeof(*peer_stats));
+		if (!peer_stats)
 			continue;
 
-		peer_stats = cdp_host_get_peer_stats(soc, peer);
-		if (peer_stats)
+		status = cdp_host_get_peer_stats(soc, CDP_INVALID_VDEV_ID,
+					ev->peer_extended_stats[i].peer_macaddr,
+					peer_stats);
+
+		if (QDF_IS_STATUS_SUCCESS(status))
 			ev->peer_extended_stats[i].rx_mc_bc_cnt =
 				peer_stats->rx.multicast.num +
 				peer_stats->rx.bcast.num;
+
+		qdf_mem_free(peer_stats);
 	}
 }
 

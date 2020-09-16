@@ -328,6 +328,7 @@ static QDF_STATUS dp_rx_defrag_fraglist_insert(struct dp_peer *peer, unsigned ti
 	rx_desc_info = qdf_nbuf_data(frag);
 	cur_fragno = dp_rx_frag_get_mpdu_frag_number(rx_desc_info);
 
+	dp_debug("cur_fragno %d\n", cur_fragno);
 	/* If this is the first fragment */
 	if (!(*head_addr)) {
 		*head_addr = *tail_addr = frag;
@@ -399,6 +400,8 @@ static QDF_STATUS dp_rx_defrag_fraglist_insert(struct dp_peer *peer, unsigned ti
 		if (!next) {
 			*all_frag_present = 1;
 			return QDF_STATUS_SUCCESS;
+		} else {
+			/* revisit */
 		}
 	}
 
@@ -802,12 +805,53 @@ static QDF_STATUS dp_rx_defrag_tkip_demic(const uint8_t *key,
  */
 static void dp_rx_frag_pull_hdr(qdf_nbuf_t nbuf, uint16_t hdrsize)
 {
-	qdf_nbuf_pull_head(nbuf,
-			RX_PKT_TLVS_LEN + hdrsize);
+	struct rx_pkt_tlvs *rx_pkt_tlv =
+				(struct rx_pkt_tlvs *)qdf_nbuf_data(nbuf);
+	struct rx_mpdu_info *rx_mpdu_info_details =
+		&rx_pkt_tlv->mpdu_start_tlv.rx_mpdu_start.rx_mpdu_info_details;
+
+	dp_debug("pn_31_0 0x%x pn_63_32 0x%x pn_95_64 0x%x pn_127_96 0x%x\n",
+		 rx_mpdu_info_details->pn_31_0, rx_mpdu_info_details->pn_63_32,
+		 rx_mpdu_info_details->pn_95_64,
+		 rx_mpdu_info_details->pn_127_96);
+
+	qdf_nbuf_pull_head(nbuf, RX_PKT_TLVS_LEN + hdrsize);
 
 	QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: final pktlen %d .11len %d",
 		  __func__, (uint32_t)qdf_nbuf_len(nbuf), hdrsize);
+}
+
+/*
+ * dp_rx_defrag_pn_check(): Check the PN of current fragmented with prev PN
+ * @msdu: msdu to get the current PN
+ * @cur_pn128: PN extracted from current msdu
+ * @prev_pn128: Prev PN
+ *
+ * Returns: 0 on success, non zero on failure
+ */
+static int dp_rx_defrag_pn_check(qdf_nbuf_t msdu,
+				 uint64_t *cur_pn128, uint64_t *prev_pn128)
+{
+	struct rx_pkt_tlvs *rx_pkt_tlv =
+			(struct rx_pkt_tlvs *)qdf_nbuf_data(msdu);
+	struct rx_mpdu_info *rx_mpdu_info_details =
+	 &rx_pkt_tlv->mpdu_start_tlv.rx_mpdu_start.rx_mpdu_info_details;
+	int out_of_order = 0;
+
+	cur_pn128[0] = rx_mpdu_info_details->pn_31_0;
+	cur_pn128[0] |=
+		((uint64_t)rx_mpdu_info_details->pn_63_32 << 32);
+	cur_pn128[1] = rx_mpdu_info_details->pn_95_64;
+	cur_pn128[1] |=
+		((uint64_t)rx_mpdu_info_details->pn_127_96 << 32);
+
+	if (cur_pn128[1] == prev_pn128[1])
+		out_of_order = (cur_pn128[0] <= prev_pn128[0]);
+	else
+		out_of_order = (cur_pn128[1] < prev_pn128[1]);
+
+	return out_of_order;
 }
 
 /*
@@ -820,15 +864,42 @@ static void dp_rx_frag_pull_hdr(qdf_nbuf_t nbuf, uint16_t hdrsize)
  *
  * Returns: None
  */
-static void
-dp_rx_construct_fraglist(struct dp_peer *peer,
-		qdf_nbuf_t head, uint16_t hdrsize)
+static int
+dp_rx_construct_fraglist(struct dp_peer *peer, int tid, qdf_nbuf_t head,
+			 uint16_t hdrsize)
 {
 	qdf_nbuf_t msdu = qdf_nbuf_next(head);
 	qdf_nbuf_t rx_nbuf = msdu;
+	struct dp_rx_tid *rx_tid = &peer->rx_tid[tid];
 	uint32_t len = 0;
+	uint64_t cur_pn128[2] = {0, 0}, prev_pn128[2];
+	int out_of_order = 0;
+	int index;
+	int needs_pn_check = 0;
+
+	prev_pn128[0] = rx_tid->pn128[0];
+	prev_pn128[1] = rx_tid->pn128[1];
+
+	index = hal_rx_msdu_is_wlan_mcast(msdu) ? dp_sec_mcast : dp_sec_ucast;
+	if (qdf_likely(peer->security[index].sec_type != cdp_sec_type_none))
+		needs_pn_check = 1;
 
 	while (msdu) {
+		if (qdf_likely(needs_pn_check))
+			out_of_order = dp_rx_defrag_pn_check(msdu,
+							     &cur_pn128[0],
+							     &prev_pn128[0]);
+
+		if (qdf_unlikely(out_of_order)) {
+			dp_info_rl("cur_pn128[0] 0x%llx cur_pn128[1] 0x%llx prev_pn128[0] 0x%llx prev_pn128[1] 0x%llx",
+				   cur_pn128[0], cur_pn128[1],
+				   prev_pn128[0], prev_pn128[1]);
+			return QDF_STATUS_E_FAILURE;
+		}
+
+		prev_pn128[0] = cur_pn128[0];
+		prev_pn128[1] = cur_pn128[1];
+
 		dp_rx_frag_pull_hdr(msdu, hdrsize);
 		len += qdf_nbuf_len(msdu);
 		msdu = qdf_nbuf_next(msdu);
@@ -844,6 +915,8 @@ dp_rx_construct_fraglist(struct dp_peer *peer,
 		  (uint32_t)qdf_nbuf_len(head),
 		  (uint32_t)qdf_nbuf_len(rx_nbuf),
 		  (uint32_t)(head->data_len));
+
+	return QDF_STATUS_SUCCESS;
 }
 
 /**
@@ -889,7 +962,8 @@ static void dp_rx_defrag_err(struct dp_vdev *vdev, qdf_nbuf_t nbuf)
  * Returns: None
  */
 static void
-dp_rx_defrag_nwifi_to_8023(qdf_nbuf_t nbuf, uint16_t hdrsize)
+dp_rx_defrag_nwifi_to_8023(struct dp_soc *soc, struct dp_peer *peer, int tid,
+			   qdf_nbuf_t nbuf, uint16_t hdrsize)
 {
 	struct llc_snap_hdr_t *llchdr;
 	struct ethernet_hdr_t *eth_hdr;
@@ -897,6 +971,21 @@ dp_rx_defrag_nwifi_to_8023(qdf_nbuf_t nbuf, uint16_t hdrsize)
 	uint16_t fc = 0;
 	union dp_align_mac_addr mac_addr;
 	uint8_t *rx_desc_info = qdf_mem_malloc(RX_PKT_TLVS_LEN);
+	struct rx_pkt_tlvs *rx_pkt_tlv =
+				(struct rx_pkt_tlvs *)qdf_nbuf_data(nbuf);
+	struct rx_mpdu_info *rx_mpdu_info_details =
+		&rx_pkt_tlv->mpdu_start_tlv.rx_mpdu_start.rx_mpdu_info_details;
+	struct dp_rx_tid *rx_tid = &peer->rx_tid[tid];
+
+	dp_debug("head_nbuf pn_31_0 0x%x pn_63_32 0x%x pn_95_64 0x%x pn_127_96 0x%x\n",
+		 rx_mpdu_info_details->pn_31_0, rx_mpdu_info_details->pn_63_32,
+		 rx_mpdu_info_details->pn_95_64,
+		 rx_mpdu_info_details->pn_127_96);
+
+	rx_tid->pn128[0] = rx_mpdu_info_details->pn_31_0;
+	rx_tid->pn128[0] |= ((uint64_t)rx_mpdu_info_details->pn_63_32 << 32);
+	rx_tid->pn128[1] = rx_mpdu_info_details->pn_95_64;
+	rx_tid->pn128[1] |= ((uint64_t)rx_mpdu_info_details->pn_127_96 << 32);
 
 	if (!rx_desc_info) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
@@ -977,6 +1066,63 @@ dp_rx_defrag_nwifi_to_8023(qdf_nbuf_t nbuf, uint16_t hdrsize)
 	qdf_mem_copy(qdf_nbuf_data(nbuf), rx_desc_info, RX_PKT_TLVS_LEN);
 	qdf_mem_free(rx_desc_info);
 }
+
+#ifdef RX_DEFRAG_DO_NOT_REINJECT
+/*
+ * dp_rx_defrag_deliver(): Deliver defrag packet to stack
+ * @peer: Pointer to the peer
+ * @tid: Transmit Identifier
+ * @head: Nbuf to be delivered
+ *
+ * Returns: None
+ */
+static inline void dp_rx_defrag_deliver(struct dp_peer *peer,
+					unsigned int tid,
+					qdf_nbuf_t head)
+{
+	struct dp_vdev *vdev = peer->vdev;
+	struct dp_soc *soc = vdev->pdev->soc;
+	qdf_nbuf_t deliver_list_head = NULL;
+	qdf_nbuf_t deliver_list_tail = NULL;
+	uint8_t *rx_tlv_hdr;
+
+	rx_tlv_hdr = qdf_nbuf_data(head);
+
+	QDF_NBUF_CB_RX_VDEV_ID(head) = vdev->vdev_id;
+	qdf_nbuf_set_tid_val(head, tid);
+	qdf_nbuf_pull_head(head, RX_PKT_TLVS_LEN);
+
+	DP_RX_LIST_APPEND(deliver_list_head, deliver_list_tail,
+			  head);
+	dp_rx_deliver_to_stack(soc, vdev, peer, deliver_list_head,
+			       deliver_list_tail);
+}
+
+/*
+ * dp_rx_defrag_reo_reinject(): Reinject the fragment chain back into REO
+ * @peer: Pointer to the peer
+ * @tid: Transmit Identifier
+ * @head: Buffer to be reinjected back
+ *
+ * Reinject the fragment chain back into REO
+ *
+ * Returns: QDF_STATUS
+ */
+static QDF_STATUS dp_rx_defrag_reo_reinject(struct dp_peer *peer,
+					    unsigned int tid, qdf_nbuf_t head)
+{
+	struct dp_rx_reorder_array_elem *rx_reorder_array_elem;
+
+	rx_reorder_array_elem = peer->rx_tid[tid].array;
+
+	dp_rx_defrag_deliver(peer, tid, head);
+	rx_reorder_array_elem->head = NULL;
+	rx_reorder_array_elem->tail = NULL;
+	dp_rx_return_head_frag_desc(peer, tid);
+
+	return QDF_STATUS_SUCCESS;
+}
+#else
 
 /*
  * dp_rx_defrag_reo_reinject(): Reinject the fragment chain back into REO
@@ -1167,6 +1313,7 @@ static QDF_STATUS dp_rx_defrag_reo_reinject(struct dp_peer *peer,
 		  "%s: reinjection done !", __func__);
 	return QDF_STATUS_SUCCESS;
 }
+#endif
 
 /*
  * dp_rx_defrag(): Defragment the fragment chain
@@ -1311,8 +1458,9 @@ static QDF_STATUS dp_rx_defrag(struct dp_peer *peer, unsigned tid,
 	}
 
 	/* Convert the header to 802.3 header */
-	dp_rx_defrag_nwifi_to_8023(frag_list_head, hdr_space);
-	dp_rx_construct_fraglist(peer, frag_list_head, hdr_space);
+	dp_rx_defrag_nwifi_to_8023(soc, peer, tid, frag_list_head, hdr_space);
+	if (dp_rx_construct_fraglist(peer, tid, frag_list_head, hdr_space))
+		return QDF_STATUS_E_DEFRAG_ERROR;
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -1505,9 +1653,13 @@ static QDF_STATUS dp_rx_defrag_store_fragment(struct dp_soc *soc,
 	}
 
 	/* Check if the fragment is for the same sequence or a different one */
+	dp_debug("rx_tid %d", tid);
 	if (rx_reorder_array_elem->head) {
+		dp_debug("rxseq %d\n", rxseq);
 		if (rxseq != rx_tid->curr_seq_num) {
 
+			dp_debug("mismatch cur_seq %d rxseq %d\n",
+				 rx_tid->curr_seq_num, rxseq);
 			/* Drop stored fragments if out of sequence
 			 * fragment is received
 			 */
@@ -1520,6 +1672,7 @@ static QDF_STATUS dp_rx_defrag_store_fragment(struct dp_soc *soc,
 				? "address"
 				: "seq number");
 
+			dp_debug("cur rxseq %d\n", rxseq);
 			/*
 			 * The sequence number for this fragment becomes the
 			 * new sequence number to be processed
@@ -1527,9 +1680,11 @@ static QDF_STATUS dp_rx_defrag_store_fragment(struct dp_soc *soc,
 			rx_tid->curr_seq_num = rxseq;
 		}
 	} else {
+		dp_debug("cur rxseq %d\n", rxseq);
 		/* Start of a new sequence */
 		dp_rx_defrag_cleanup(peer, tid);
 		rx_tid->curr_seq_num = rxseq;
+		/* store PN number also */
 	}
 
 	/*

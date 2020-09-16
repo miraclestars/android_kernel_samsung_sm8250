@@ -809,8 +809,10 @@ struct cdp_host_stats_ops {
 	void
 		(*txrx_update_pdev_stats)(struct cdp_pdev *pdev, void *data,
 					  uint16_t stats_id);
-	struct cdp_peer_stats*
-		(*txrx_get_peer_stats)(struct cdp_peer *peer);
+	QDF_STATUS
+		(*txrx_get_peer_stats)(struct cdp_soc_t *soc, uint8_t vdev_id,
+				       uint8_t *peer_mac,
+				       struct cdp_peer_stats *peer_stats);
 	void
 		(*txrx_reset_peer_ald_stats)(struct cdp_peer *peer);
 	void

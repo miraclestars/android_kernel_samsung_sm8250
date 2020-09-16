@@ -494,26 +494,33 @@ cdp_update_vdev_host_stats(ol_txrx_soc_handle soc,
 }
 
 /**
- * @brief Call to get peer stats
+ * cdp_host_get_peer_stats() - Function to get host peer stats
+ * @soc: soc handle
+ * @vdev_id: vdev_id of vdev object
+ * @peer_mac: mac address of the peer
+ * @peer_stats: stats will be populated in this buffer
  *
- * @param peer - dp peer object
- * @return - struct cdp_peer_stats
+ * Return: qdf status
  */
-static inline struct cdp_peer_stats *
-cdp_host_get_peer_stats(ol_txrx_soc_handle soc, struct cdp_peer *peer)
+static inline QDF_STATUS
+cdp_host_get_peer_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
+			uint8_t *peer_mac,
+			struct cdp_peer_stats *peer_stats)
 {
 	if (!soc || !soc->ops) {
 		QDF_TRACE(QDF_MODULE_ID_CDP, QDF_TRACE_LEVEL_DEBUG,
 			  "%s: Invalid Instance", __func__);
 		QDF_BUG(0);
-		return NULL;
+		return QDF_STATUS_E_FAILURE;
 	}
 
 	if (!soc->ops->host_stats_ops ||
 	    !soc->ops->host_stats_ops->txrx_get_peer_stats)
-		return NULL;
+		return QDF_STATUS_E_FAILURE;
 
-	return soc->ops->host_stats_ops->txrx_get_peer_stats(peer);
+	return soc->ops->host_stats_ops->txrx_get_peer_stats(soc, vdev_id,
+							     peer_mac,
+							     peer_stats);
 }
 
 /**
