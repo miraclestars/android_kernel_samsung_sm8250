@@ -1074,6 +1074,8 @@ typedef enum {
     WMI_QBOOST_CFG_CMDID,
     /* Simulation Test command  */
     WMI_SIMULATION_TEST_CMDID,
+    /* WFA test config command */
+    WMI_WFA_CONFIG_CMDID,
 
     /** TDLS Configuration */
     /** enable/disable TDLS */
@@ -3769,6 +3771,12 @@ typedef struct {
      * the target and host.
      */
     A_UINT32 max_ap_vaps;
+
+    /** @brief cbc_flow_ena
+     * When cbc_flow_ena is se, halphy will do Cold Boot Calibration flow.
+     * Otherwise, halphy will do normal flow.
+     */
+    A_UINT32 cbc_flow_ena;
 } wmi_resource_config;
 
 #define WMI_MSDU_FLOW_AST_ENABLE_GET(msdu_flow_config0, ast_x) \
@@ -6819,11 +6827,19 @@ typedef enum {
      * allow spatial reuse only if the RSSI detected from neighboring
      * BSS cells is no more than 10 dB.
      *
+     * If Bit 29 is set, then input value will be in dBm. This is used
+     * for chipsets that uses dBm for comparision across MAC/Phy blocks.
+     * Older chipsets support input in dB units. For newer chipsets, dBm
+     * units will be used.
+     * The host will use the WMI_SERVICE_SRG_SRP_SPATIAL_REUSE_SUPPORT
+     * service ready bit to differentiate between providing input as dB or dBm.
+     *
      * bit    | purpose
      * -----------------
      * 0  - 7 | Param Value for non-SRG based Spatial Reuse
      * 8  - 15| Param value for SRG based Spatial Reuse
-     * 16 - 29| Reserved
+     * 16 - 28| Reserved
+     * 29     | Param value is in dBm units rather than dB units
      * 30     | Enable/Disable SRG based spatial reuse.
      *        | If set to 0, ignore bits 8-15.
      * 31     | Enable/Disable Non-SRG based spatial reuse.
@@ -6985,6 +7001,9 @@ typedef enum {
 #define WMI_PDEV_SRG_DISABLE(pd_threshold_cfg) WMI_SET_BITS(pd_threshold_cfg, 30, 1, 0)
 #define WMI_PDEV_SRG_PD_THRESHOLD_SET(pd_threshold_cfg, value) WMI_SET_BITS(pd_threshold_cfg, 8, 8, value)
 #define WMI_PDEV_SRG_PD_THRESHOLD_GET(pd_threshold_cfg) WMI_GET_BITS(pd_threshold_cfg, 8, 8)
+
+#define WMI_PDEV_IS_PD_THRESHOLD_IN_DBM(pd_threshold_cfg) WMI_GET_BITS(pd_threshold_cfg, 29, 1)
+#define WMI_PDEV_SET_PD_THRESHOLD_IN_DBM(pd_threshold_cfg) WMI_SET_BITS(pd_threshold_cfg, 29, 1, 1)
 
 #define WMI_PDEV_OBSS_PD_ENABLE_PER_AC_SET(per_ac_cfg, value) WMI_SET_BITS(per_ac_cfg, 0, 4, value)
     #define WMI_PDEV_OBSS_PD_ENABLE_PER_AC_GET(per_ac_cfg) WMI_GET_BITS(per_ac_cfg, 0, 4)
@@ -11386,11 +11405,19 @@ typedef enum {
      * allow spatial reuse only if the RSSI detected from neighboring
      * BSS cells is no more than 10 dB.
      *
+     * If Bit 29 is set, then input value will be in dBm. This is used
+     * for chipsets that uses dBm for comparision across MAC/Phy blocks.
+     * Older chipsets support input in dB units. For newer chipsets, dBm
+     * units will be used.
+     * The host will use the WMI_SERVICE_SRG_SRP_SPATIAL_REUSE_SUPPORT
+     * service ready bit to differentiate between providing input as dB or dBm.
+     *
      * bit    | purpose
      * -----------------
      * 0  - 7 | Param Value for non-SRG based Spatial Reuse
      * 8  - 15| Param value for SRG based Spatial Reuse
-     * 16 - 29| Reserved
+     * 16 - 28| Reserved
+     * 29     | Param value is in dBm units rather than dB units
      * 30     | Enable/Disable SRG based spatial reuse.
      *        | If set to 0, ignore bits 8-15.
      * 31     | Enable/Disable Non-SRG based spatial reuse.
@@ -14021,6 +14048,8 @@ typedef struct {
 #define WMI_AP_PROFILE_FLAG_CRYPTO 0x2
 /** looking for a PMF enabled AP */
 #define WMI_AP_PROFILE_FLAG_PMF    0x4
+/** If this flag is set roam to SAE_H2E (Hash to Element) enabled APs only */
+#define WMI_AP_PROFILE_FLAG_SAE_H2E 0x8
 
 /* the value used in wmi_roam_cnd_scoring_param->disable_bitmap */
 #define WLAN_ROAM_SCORING_RSSI_DISABLE                  0x00000001
@@ -14271,6 +14300,12 @@ typedef struct {
      * Only used if oce_ap_subnet_id_weightage_pcnt != 0.
      */
     A_UINT32 oce_ap_subnet_id_weightage_pcnt;
+    /*
+     * Give weightage to SAE-PK (Simulataneous Authentication of Equals -
+     * Public Key) enabled network APs.
+     * Only used if sae_pk_ap_weightage_pcnt != 0.
+     */
+    A_UINT32 sae_pk_ap_weightage_pcnt;
 } wmi_roam_cnd_scoring_param;
 
 typedef struct {
@@ -28842,6 +28877,7 @@ typedef enum {
     WMI_ROAM_CND_OCE_WAN_SCORING          = 0x00000400, /* FW considers OCE WAN metrics scoring */
     WMI_ROAM_CND_OCE_AP_TX_PWR_SCORING    = 0x00000800, /* FW considers OCE AP Tx power scoring */
     WMI_ROAM_CND_OCE_AP_SUBNET_ID_SCORING = 0x00001000, /* FW considers OCE AP subnet id scoring */
+    WMI_ROAM_CND_SAE_PK_AP_SCORING        = 0x00002000, /* FW considers SAE-PK enabled AP scoring */
 } WMI_ROAM_CND_SCORING_PARAMS;
 
 typedef struct {
@@ -31652,6 +31688,75 @@ typedef struct {
  *       of the frame.
  */
 } wmi_simulation_test_cmd_fixed_param;
+
+typedef struct {
+    /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_wfa_config_rsnxe */
+    A_UINT32 tlv_header;
+    /* rsnxe_param
+     * Override RSNXE Used bit in FT reassoc request.
+     *   Possible values from host are:
+     *   0  use default value based on capability
+     *   1  override with 1
+     *   2  override with 0
+     */
+    A_UINT32 rsnxe_param;
+} wmi_wfa_config_rsnxe;
+
+typedef struct {
+    /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_wfa_config_csa */
+    A_UINT32 tlv_header;
+    /* ignore_csa
+     * Ignore CSA from AP and keep STA in current channel and don't deauth AP.
+     *   Possible values from host are:
+     *   0  default behavior
+     *   1  ignore CSA
+     */
+    A_UINT32 ignore_csa;
+} wmi_wfa_config_csa;
+
+typedef enum {
+    WMI_WFA_CONFIG_OCV_FRMTYPE_SAQUERY_REQ          = 0x00000001,
+    WMI_WFA_CONFIG_OCV_FRMTYPE_SAQUERY_RSP          = 0x00000002,
+    WMI_WFA_CONFIG_OCV_FRMTYPE_FT_REASSOC_REQ       = 0x00000004,
+    WMI_WFA_CONFIG_OCV_FRMTYPE_FILS_REASSOC_REQ     = 0x00000008,
+} WMI_WFA_CONFIG_OCV_FRMTYPE;
+
+typedef struct {
+    /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_wfa_config_ocv */
+    A_UINT32 tlv_header;
+    /* frame_types
+     * Override OCI channel number in specified frames.
+     * Possible frame types from host are enum WMI_WFA_CONFIG_OCV_FRMTYPE.
+     */
+    A_UINT32 frame_types;
+    /* Frequency value in mhz to override in specified frame type */
+    A_UINT32 chan_freq;
+} wmi_wfa_config_ocv;
+
+typedef struct {
+    /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_wfa_config_saquery */
+    A_UINT32 tlv_header;
+    /* remain_connect_on_saquery_timeout
+     * Don't send deauth on SA Query response timeout.
+     *   Possible values from host are:
+     *   0  default behavior
+     *   1  don't send deauth on SA Query response timeout
+     */
+    A_UINT32 remain_connect_on_saquery_timeout;
+} wmi_wfa_config_saquery;
+
+typedef struct {
+    /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_wfa_config_cmd_fixed_param */
+    A_UINT32 tlv_header;
+    /** VDEV identifier */
+    A_UINT32 vdev_id;
+    /* The below TLV arrays follow this structure:
+     * wmi_wfa_config_rsnxe   wfa_config_rsnxe[];   (0 or 1 elements)
+     * wmi_wfa_config_csa     wfa_config_csa[];     (0 or 1 elements)
+     * wmi_wfa_config_ocv     wfa_config_ocv[];     (0 or 1 elements)
+     * wmi_wfa_config_saquery wfa_config_saquery[]; (0 or 1 elements)
+     */
+} wmi_wfa_config_cmd_fixed_param;
 
 #define WMI_TWT_SESSION_FLAG_FLOW_ID_GET(_var) WMI_GET_BITS(_var, 0, 16)
 #define WMI_TWT_SESSION_FLAG_FLOW_ID_SET(_var, _val) WMI_SET_BITS(_var, 0, 16, _val)
