@@ -21141,16 +21141,6 @@ int __wlan_hdd_cfg80211_del_station(struct wiphy *wiphy,
 			hdd_debug("ucast, Delete STA with MAC:" QDF_MAC_ADDR_STR,
 				  QDF_MAC_ADDR_ARRAY(mac));
 
-			/* Case: SAP in ACS selected DFS ch and client connected
-			 * Now Radar detected. Then if random channel is another
-			 * DFS ch then new CAC is initiated and no TX allowed.
-			 * So do not send any mgmt frames as it will timeout
-			 * during CAC.
-			 */
-
-			if (hdd_ctx->dev_dfs_cac_status == DFS_CAC_IN_PROGRESS)
-				goto fn_end;
-
 			qdf_event_reset(&hapd_state->qdf_sta_disassoc_event);
 			sme_send_disassoc_req_frame(mac_handle,
 					adapter->vdev_id,
