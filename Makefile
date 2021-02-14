@@ -513,6 +513,10 @@ ifneq ($(KBUILD_SRC),)
 	    $(srctree) $(objtree) $(VERSION) $(PATCHLEVEL)
 endif
 
+PLATFORM_VERSION ?= 11.0.0
+@echo "PLATFORM_VERSION: $(PLATFORM_VERSION)"
+export PLATFORM_VERSION
+
 ifeq ($(cc-name),clang)
 ifneq ($(CROSS_COMPILE),)
 CLANG_FLAGS	+= --target=$(notdir $(CROSS_COMPILE:%-=%))
