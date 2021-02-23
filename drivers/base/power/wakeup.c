@@ -19,7 +19,51 @@
 #include <trace/events/power.h>
 #include <linux/irq.h>
 #include <linux/interrupt.h>
-#include <linux/irqdesc.h>
+#include <linux/moduleparam.h>
+static bool enable_si_ws = true;
+module_param(enable_si_ws, bool, 0644);
+static bool enable_rewthelper_ws = true;
+module_param(enable_rewthelper_ws, bool, 0644);
+static bool enable_xposedlog_ws = true;
+module_param(enable_xposedlog_ws, bool, 0644);
+static bool enable_corectl0_ws = true;
+module_param(enable_corectl0_ws, bool, 0644);
+static bool enable_corectl2_ws = true;
+module_param(enable_corectl2_ws, bool, 0644);
+static bool enable_bt_timer_ws = true;
+module_param(enable_bt_timer_ws, bool, 0644);
+static bool enable_qpnpsmbcharger_ws = true;
+module_param(enable_qpnpsmbcharger_ws, bool, 0644);
+static bool enable_msm_hsic_ws = true;
+module_param(enable_msm_hsic_ws, bool, 0644);
+static bool enable_wlan_rx_wake_ws = true;
+module_param(enable_wlan_rx_wake_ws, bool, 0644);
+static bool enable_wlan_ctrl_wake_ws = true;
+module_param(enable_wlan_ctrl_wake_ws, bool, 0644);
+static bool enable_wlan_wake_ws = true;
+module_param(enable_wlan_wake_ws, bool, 0644);
+static bool enable_sensorhub_ws = true;
+module_param(enable_sensorhub_ws, bool, 0644);
+static bool enable_ssp_ws = true;
+module_param(enable_ssp_ws, bool, 0644);
+static bool enable_bcm4773_ws = true;
+module_param(enable_bcm4773_ws, bool, 0644);
+static bool enable_timerfd_ws = true;
+module_param(enable_timerfd_ws, bool, 0644);
+static bool enable_netlink_ws = true;
+module_param(enable_netlink_ws, bool, 0644);
+static bool enable_netmgr_wl_ws = true;
+module_param(enable_netmgr_wl_ws, bool, 0644);
+static bool enable_ipa_ws = true;
+module_param(enable_ipa_ws, bool, 0644);
+static bool enable_wlan_ws = true;
+module_param(enable_wlan_ws, bool, 0644);
+static bool enable_qcom_rx_wakelock_ws = true;
+module_param(enable_qcom_rx_wakelock_ws, bool, 0644);
+static bool enable_wcnss_filter_lock_ws = true;
+module_param(enable_wcnss_filter_lock_ws, bool, 0644);
+static bool enable_wmi_rx_event_wo_ws = true;
+module_param(enable_wmi_rx_event_wo_ws, bool, 0644);
 
 #include "power.h"
 #ifdef CONFIG_SEC_PM
@@ -29,6 +73,16 @@
 #ifndef CONFIG_SUSPEND
 suspend_state_t pm_suspend_target_state;
 #define pm_suspend_target_state	(PM_SUSPEND_ON)
+#endif
+
+#ifdef CONFIG_BOEFFLA_WL_BLOCKER
+#include "boeffla_wl_blocker.h"
+
+char list_wl_search[LENGTH_LIST_WL_SEARCH] = {0};
+bool wl_blocker_active = false;
+bool wl_blocker_debug = false;
+
+static void wakeup_source_deactivate(struct wakeup_source *ws);
 #endif
 
 /*
@@ -502,6 +556,65 @@ static bool wakeup_source_not_registered(struct wakeup_source *ws)
 	return ws->timer.function != pm_wakeup_timer_fn;
 }
 
+static bool wakeup_source_blocker(struct wakeup_source *ws)
+{
+	unsigned int wslen = 0;
+	if (ws) {
+		wslen = strlen(ws->name);
+		if ((!enable_ipa_ws && !strncmp(ws->name, "IPA_WS", wslen)) ||
+			(!enable_wlan_wake_ws &&
+				!strncmp(ws->name, "wlan_wake", wslen)) ||
+			(!enable_qcom_rx_wakelock_ws &&
+				!strncmp(ws->name, "qcom_rx_wakelock", wslen)) ||
+			(!enable_wlan_ws &&
+				!strncmp(ws->name, "wlan", wslen)) ||
+			(!enable_timerfd_ws &&
+				!strncmp(ws->name, "[timerfd]", wslen)) ||
+			(!enable_si_ws &&
+				!strncmp(ws->name, "sensor_ind", wslen)) ||
+			(!enable_bt_timer_ws &&
+				!strncmp(ws->name, "bluetooth_timer", wslen)) ||
+			(!enable_xposedlog_ws &&
+				!strncmp(ws->name, "xposed_logcat", wslen)) ||
+			(!enable_rewthelper_ws &&
+				!strncmp(ws->name, "RewtHelper", wslen)) ||
+			(!enable_corectl0_ws &&
+				!strncmp(ws->name, "core_ctl/0", wslen)) ||
+			(!enable_corectl2_ws &&
+				!strncmp(ws->name, "core_ctl/2", wslen)) ||
+			(!enable_qpnpsmbcharger_ws &&
+				!strncmp(ws->name, "qpnp-smbcharger-16", wslen)) ||
+			(!enable_msm_hsic_ws &&
+				!strncmp(ws->name, "msm_hsic_host", wslen)) ||
+			(!enable_wlan_rx_wake_ws &&
+				!strncmp(ws->name, "wlan_rx_wake", wslen)) ||
+			(!enable_wlan_ctrl_wake_ws &&
+				!strncmp(ws->name, "wlan_ctrl_wake", wslen)) ||
+			(!enable_sensorhub_ws &&
+				!strncmp(ws->name, "ssp_sensorhub_wake_lock", wslen)) ||
+			(!enable_ssp_ws &&
+				!strncmp(ws->name, "ssp_wake_lock", wslen)) ||
+			(!enable_bcm4773_ws &&
+				!strncmp(ws->name, "bcm4773_wake_lock", wslen)) ||
+			(!enable_netmgr_wl_ws &&
+				!strncmp(ws->name, "netmgr_wl", wslen)) ||
+			(!enable_wcnss_filter_lock_ws &&
+				!strncmp(ws->name, "wcnss_filter_lock", wslen)) ||
+			(!enable_wmi_rx_event_wo_ws &&
+				!strncmp(ws->name, "wmi_rx_event_wo", wslen)) ||
+			(!enable_netlink_ws &&
+				!strncmp(ws->name, "NETLINK", wslen))) {
+			if (ws->active) {
+				wakeup_source_deactivate(ws);
+				pr_info("forcefully deactivate wakeup source: %s\n",
+					ws->name);
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
 /*
  * The functions below use the observation that each wakeup event starts a
  * period in which the system should not be suspended.  The moment this period
@@ -558,6 +671,57 @@ static void wakeup_source_activate(struct wakeup_source *ws)
 	trace_wakeup_source_activate(ws->name, cec);
 }
 
+#ifdef CONFIG_BOEFFLA_WL_BLOCKER
+// AP: Function to check if a wakelock is on the wakelock blocker list
+static bool check_for_block(struct wakeup_source *ws)
+{
+	char wakelock_name[52] = {0};
+	int length;
+
+	// if debug mode on, print every wakelock requested
+	if (wl_blocker_debug)
+		printk("Boeffla WL blocker: %s requested\n", ws->name);
+
+	// if there is no list of wakelocks to be blocked, exit without futher checking
+	if (!wl_blocker_active)
+		return false;
+
+	// only if ws structure is valid
+	if (ws)
+	{
+		// wake lock names handled have maximum length=50 and minimum=1
+		length = strlen(ws->name);
+		if ((length > 50) || (length < 1))
+			return false;
+
+		// check if wakelock is in wake lock list to be blocked
+		sprintf(wakelock_name, ";%s;", ws->name);
+
+		if(strstr(list_wl_search, wakelock_name) == NULL)
+			return false;
+
+		// wake lock is in list, print it if debug mode on
+		if (wl_blocker_debug)
+			printk("Boeffla WL blocker: %s blocked\n", ws->name);
+
+		// if it is currently active, deactivate it immediately + log in debug mode
+		if (ws->active)
+		{
+			wakeup_source_deactivate(ws);
+
+			if (wl_blocker_debug)
+				printk("Boeffla WL blocker: %s killed\n", ws->name);
+		}
+
+		// finally block it
+		return true;
+	}
+
+	// there was no valid ws structure, do not block by default
+	return false;
+}
+#endif
+
 /**
  * wakeup_source_report_event - Report wakeup event using the given source.
  * @ws: Wakeup source to report the event for.
@@ -565,16 +729,23 @@ static void wakeup_source_activate(struct wakeup_source *ws)
  */
 static void wakeup_source_report_event(struct wakeup_source *ws, bool hard)
 {
-	ws->event_count++;
-	/* This is racy, but the counter is approximate anyway. */
-	if (events_check_enabled)
-		ws->wakeup_count++;
+#ifdef CONFIG_BOEFFLA_WL_BLOCKER
+	if (!check_for_block(ws))	// AP: check if wakelock is on wakelock blocker list
+	{
+#endif
+		ws->event_count++;
+		/* This is racy, but the counter is approximate anyway. */
+		if (events_check_enabled)
+			ws->wakeup_count++;
 
-	if (!ws->active)
-		wakeup_source_activate(ws);
+		if (!ws->active)
+			wakeup_source_activate(ws);
 
-	if (hard)
-		pm_system_wakeup();
+		if (hard)
+			pm_system_wakeup();
+#ifdef CONFIG_BOEFFLA_WL_BLOCKER
+	}
+#endif
 }
 
 /**
@@ -863,7 +1034,10 @@ void pm_print_active_wakeup_sources(void)
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
 			pr_info("active wakeup source: %s\n", ws->name);
-			active = 1;
+#ifdef CONFIG_BOEFFLA_WL_BLOCKER
+			if (!check_for_block(ws))	// AP: check if wakelock is on wakelock blocker list
+#endif
+				active = 1;
 		} else if (!active &&
 			   (!last_activity_ws ||
 			    ktime_to_ns(ws->last_time) >
