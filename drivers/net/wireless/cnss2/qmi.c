@@ -503,7 +503,6 @@ static int __init sec_hw_rev_setup(char *p)
 early_param("androidboot.revision", sec_hw_rev_setup);
 
 #endif
-extern int ant_from_macloader;
 
 static int cnss_get_bdf_file_name(struct cnss_plat_data *plat_priv,
 				  u32 bdf_type, char *filename,
@@ -515,20 +514,11 @@ static int cnss_get_bdf_file_name(struct cnss_plat_data *plat_priv,
 	switch (bdf_type) {
 	case CNSS_BDF_ELF:
 		if (plat_priv->board_info.board_id == 0xFF)
-			if (ant_from_macloader == 1 || ant_from_macloader == 2) {
-				snprintf(filename_tmp, filename_len, ELF_BDF_FILE_NAME "%d",
-					ant_from_macloader);
-			} else
-				snprintf(filename_tmp, filename_len, ELF_BDF_FILE_NAME);
+			snprintf(filename_tmp, filename_len, ELF_BDF_FILE_NAME);
 		else if (plat_priv->board_info.board_id < 0xFF)
-			if (ant_from_macloader == 1 || ant_from_macloader == 2) {
-				snprintf(filename_tmp, filename_len,
-					 ELF_BDF_FILE_NAME_PREFIX "%02x%d",
-					 plat_priv->board_info.board_id, ant_from_macloader);
-			} else
-				snprintf(filename_tmp, filename_len,
-					 ELF_BDF_FILE_NAME_PREFIX "%02x",
-					 plat_priv->board_info.board_id);
+			snprintf(filename_tmp, filename_len,
+				 ELF_BDF_FILE_NAME_PREFIX "%02x",
+				 plat_priv->board_info.board_id);
 		else
 			snprintf(filename_tmp, filename_len,
 				 BDF_FILE_NAME_PREFIX "%02x.e%02x",
