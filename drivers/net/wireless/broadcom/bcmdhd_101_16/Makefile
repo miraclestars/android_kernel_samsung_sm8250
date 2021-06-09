@@ -480,7 +480,7 @@ ifneq ($(CONFIG_CFG80211_SCANTYPE_BKPORT),)
 endif
 
   DHDCFLAGS += -DWL_STATIC_IF
-  DHDCFLAGS += -DWL_STATIC_IFNAME_PREFIX="\"swlan0\""
+  DHDCFLAGS += -DWL_STATIC_IFNAME_PREFIX="\"wlan1\""
 #OWE
   DHDCFLAGS += -DWL_OWE
 # Disable HE on P2P based on peer support
@@ -752,7 +752,7 @@ ifneq ($(filter y m,$(CONFIG_BCM4375)),)
   DHDCFLAGS += -DWL_SAE
  endif
  DHDCFLAGS += -DWL_STATIC_IF
- DHDCFLAGS += -DWL_STATIC_IFNAME_PREFIX="\"swlan0\""
+ DHDCFLAGS += -DWL_STATIC_IFNAME_PREFIX="\"wlan1\""
  #OWE
  DHDCFLAGS += -DWL_OWE
  # Disable HE on SoftAP and P2P
