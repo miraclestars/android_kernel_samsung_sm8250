@@ -21,15 +21,15 @@ struct random_ready_callback {
 extern void add_device_randomness(const void *, unsigned int);
 extern void add_bootloader_randomness(const void *, unsigned int);
 
-#if defined(LATENT_ENTROPY_PLUGIN) && !defined(__CHECKER__)
 static inline void add_latent_entropy(void)
 {
+#if defined(LATENT_ENTROPY_PLUGIN) && !defined(__CHECKER__)
 	add_device_randomness((const void *)&latent_entropy,
 			      sizeof(latent_entropy));
-}
 #else
-static inline void add_latent_entropy(void) {}
+	add_device_randomness(NULL, 0);
 #endif
+}
 
 extern void add_input_randomness(unsigned int type, unsigned int code,
 				 unsigned int value) __latent_entropy;
