@@ -3,8 +3,8 @@
 #define __LINUX_BITS_H
 
 #include <linux/const.h>
-#ifdef __GENKSYMS__
 #include <vdso/bits.h>
+#ifdef __GENKSYMS__
 /*
  * Old version of this macro to preserve the CRC signatures of some drm symbols.
  * Crazy but true...
