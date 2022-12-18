@@ -5033,7 +5033,7 @@ static ssize_t ss_window_color_store(struct device *dev,
 {
 	struct samsung_display_driver_data *vdd =
 		(struct samsung_display_driver_data *)dev_get_drvdata(dev);
-	char color[2];
+	char color[3];
 	int ret = 0;
 
 	if (IS_ERR_OR_NULL(vdd)) {
