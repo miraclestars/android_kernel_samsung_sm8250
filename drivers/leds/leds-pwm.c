@@ -172,7 +172,7 @@ static int led_pwm_set(struct led_classdev *led_cdev,
 	led_data->blinking = false;
 
 	led_data->pwmstate.duty_cycle = duty;
-	led_data->pwmstate.enabled = duty > 0;
+	led_data->pwmstate.enabled = true;
 	return pwm_apply_state(led_data->pwm, &led_data->pwmstate);
 }
 
